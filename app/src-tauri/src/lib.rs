@@ -204,6 +204,52 @@ fn cancel_job(state: State<AppState>, id: u32) {
     state.jobs.cancel(id);
 }
 
+/// Drags entries of the open archive out to Explorer (or any drop target): only they are
+/// extracted, into a temporary folder, then the system drag starts with those files.
+/// Ends when they are dropped or the drag is cancelled: "dropped" | "cancelled".
+#[tauri::command]
+async fn drag_out(
+    window: tauri::WebviewWindow,
+    archive: String,
+    password: Option<String>,
+    items: Vec<String>,
+    base: String,
+) -> Result<String, String> {
+    let paths = tauri::async_runtime::spawn_blocking(move || {
+        jobs::extract_for_drag(Path::new(&archive), password.as_deref(), &items, &base).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+
+    // DoDragDrop runs its own loop on the UI thread until the drop
+    let (tx, rx) = std::sync::mpsc::channel::<Result<String, String>>();
+    let target = window.clone();
+    window
+        .run_on_main_thread(move || {
+            let done = tx.clone();
+            let icon = drag::Image::Raw(include_bytes!("../icons/64x64.png").to_vec());
+            let result = drag::start_drag(
+                &target,
+                drag::DragItem::Files(paths),
+                icon,
+                move |result, _| {
+                    let _ = done.send(Ok(match result {
+                        drag::DragResult::Dropped => "dropped".into(),
+                        drag::DragResult::Cancel => "cancelled".into(),
+                    }));
+                },
+                drag::Options::default(),
+            );
+            if let Err(e) = result {
+                let _ = tx.send(Err(e.to_string()));
+            }
+        })
+        .map_err(|e| e.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || rx.recv().unwrap_or_else(|_| Ok("cancelled".into())))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 fn pause_job(state: State<AppState>, id: u32, paused: bool) {
     state.jobs.pause(id, paused);
@@ -240,6 +286,40 @@ fn set_config(state: State<AppState>, config: Config) -> Result<(), String> {
         result.map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+/// About > PayPal: the donation page in the default browser. The address is fixed here,
+/// so the page cannot open arbitrary URLs.
+#[tauri::command]
+fn open_donate() -> Result<(), String> {
+    open_in_browser(DONATE_URL)
+}
+
+const DONATE_URL: &str = "https://www.paypal.com/donate/?business=sergiisidko%40gmail.com&currency_code=USD";
+
+/// Opens a project's web page from About > Licenses. Only http(s) addresses are accepted,
+/// so the page cannot start programs or open local files.
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    let web = url.starts_with("https://") || url.starts_with("http://");
+    if !web || url.chars().any(|c| c.is_whitespace() || c == '"') {
+        return Err("Not a web address".into());
+    }
+    open_in_browser(&url)
+}
+
+fn open_in_browser(url: &str) -> Result<(), String> {
+    // The URL protocol handler always hands the address to the default browser
+    // (`explorer <url>` can open a folder instead because of `&` and `?`)
+    #[cfg(windows)]
+    let mut command = std::process::Command::new("rundll32");
+    #[cfg(windows)]
+    command.args(["url.dll,FileProtocolHandler", url]);
+    #[cfg(not(windows))]
+    let mut command = std::process::Command::new("xdg-open");
+    #[cfg(not(windows))]
+    command.arg(url);
+    command.spawn().map(|_| ()).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -474,9 +554,12 @@ pub fn run() {
             start_job,
             cancel_job,
             pause_job,
+            drag_out,
             is_busy,
             reveal,
             set_config,
+            open_donate,
+            open_url,
             quit,
         ])
         .run(tauri::generate_context!())

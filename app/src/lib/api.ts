@@ -110,6 +110,8 @@ export const api = {
   startJob: (id: number, spec: JobSpec) => invoke<void>("start_job", { id, spec }),
   cancelJob: (id: number) => invoke<void>("cancel_job", { id }),
   pauseJob: (id: number, paused: boolean) => invoke<void>("pause_job", { id, paused }),
+  dragOut: (archive: string, password: string | null, items: string[], base: string) =>
+    invoke<"dropped" | "cancelled">("drag_out", { archive, password, items, base }),
   isBusy: () => invoke<boolean>("is_busy"),
   takeTask: (id: number) => invoke<Task | null>("take_task", { id }),
   openTask: (task: Task) => invoke<void>("open_task", { task }),

@@ -204,6 +204,36 @@ fn extract_to_folder(
     Ok(target)
 }
 
+/// Drag & drop out of the archive: the selected entries of the current folder are extracted into
+/// a fresh temporary folder, and these files are what Explorer copies when they are dropped.
+/// Returns the top-level paths to drag (one per selected entry).
+pub fn extract_for_drag(path: &Path, password: Option<&str>, items: &[String], base: &str) -> archive::Result<Vec<PathBuf>> {
+    static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let dest = crate::config::temp_dir().join(format!("drag-{}-{n}", std::process::id()));
+    let _ = fs::remove_dir_all(&dest);
+    let opts = ExtractOptions {
+        dest: &dest,
+        password,
+        items: Some(items.iter().cloned().collect()),
+        base: base.to_string(),
+        conflict: Conflict::Overwrite,
+    };
+    archive::extract(path, &opts, &Progress::default())?;
+    let paths: Vec<PathBuf> = items
+        .iter()
+        .filter_map(|item| {
+            let relative = if base.is_empty() { item.as_str() } else { item.strip_prefix(base)?.trim_start_matches('/') };
+            archive::safe_join(&dest, relative)
+        })
+        .filter(|p| p.exists())
+        .collect();
+    if paths.is_empty() {
+        return Err(Error::Other("not_found".into()));
+    }
+    Ok(paths)
+}
+
 /// A folder per archive, so files with the same name from different archives don't collide.
 fn temp_folder(archive: &Path) -> PathBuf {
     use std::hash::{Hash, Hasher};
@@ -230,5 +260,35 @@ pub fn report_loop(app: AppHandle) {
         if !events.is_empty() {
             let _ = app.emit("job-progress", events);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn drag_extracts_only_the_dragged_entries() {
+        let root = std::env::temp_dir().join(format!("arc-drag-test-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let src = root.join("docs");
+        fs::create_dir_all(src.join("папка")).unwrap();
+        fs::write(src.join("a.txt"), "a").unwrap();
+        fs::write(src.join("b.txt"), "b").unwrap();
+        fs::write(src.join("папка").join("c.txt"), "c").unwrap();
+        let zip = root.join("t.zip");
+        let opts = CreateOptions { format: archive::Format::Zip, level: 1, password: None, encrypt_names: false };
+        archive::create(&[src], &zip, &opts, &Progress::default()).unwrap();
+
+        let items = vec!["docs/b.txt".to_string(), "docs/папка".to_string()];
+        let paths = extract_for_drag(&zip, None, &items, "docs").unwrap();
+        assert_eq!(paths.len(), 2);
+        assert_eq!(fs::read_to_string(&paths[0]).unwrap(), "b");
+        assert!(paths[1].join("c.txt").exists());
+        // Only what was dragged is extracted
+        let dest = paths[0].parent().unwrap();
+        assert!(!dest.join("a.txt").exists());
+        let _ = fs::remove_dir_all(dest);
+        let _ = fs::remove_dir_all(&root);
     }
 }

@@ -53,7 +53,7 @@
   }
   .drop img {
     margin-bottom: 8px;
-    filter: drop-shadow(0 6px 16px rgba(0, 0, 0, 0.25));
+    filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.2));
   }
   .headline {
     font-size: 18px;

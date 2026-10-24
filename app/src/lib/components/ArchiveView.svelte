@@ -42,6 +42,33 @@
   /** Anchor of shift-click ranges */
   let anchor: string | null = null;
   let menu = $state<{ items: MenuItem[]; x: number; y: number } | null>(null);
+  /** A pressed row: moving away from it starts dragging the selection out to Explorer */
+  let press: { x: number; y: number; node: Node; reselect: boolean } | null = null;
+
+  function onrowdown(node: Node, e: PointerEvent) {
+    if (e.button !== 0) return;
+    // Pressing a selected row keeps the selection, so several files can be dragged together;
+    // a plain click still selects only that row (on release)
+    const keep = selection.has(node.path) && !e.ctrlKey && !e.metaKey && !e.shiftKey;
+    if (!keep) select(node, e);
+    press = { x: e.clientX, y: e.clientY, node, reselect: keep };
+  }
+
+  function onlistmove(e: PointerEvent) {
+    if (!press || !(e.buttons & 1)) return;
+    if (Math.hypot(e.clientX - press.x, e.clientY - press.y) < 6) return;
+    press = null;
+    actions.dragOut();
+  }
+
+  function onlistup() {
+    if (press?.reselect) {
+      selection.clear();
+      selection.add(press.node.path);
+      anchor = press.node.path;
+    }
+    press = null;
+  }
 
   const nodes = $derived.by(() => {
     const all = archive.tree.children.get(view.cwd) ?? [];
@@ -217,6 +244,8 @@
     bind:clientHeight={height}
     onscroll={() => (scrollTop = list.scrollTop)}
     onpointerdown={(e) => e.target === e.currentTarget && selection.clear()}
+    onpointermove={onlistmove}
+    onpointerup={onlistup}
     oncontextmenu={(e) => e.target === e.currentTarget && oncontextmenu(e, null)}
   >
     {#if nodes.length === 0}
@@ -233,7 +262,7 @@
           role="option"
           tabindex="-1"
           aria-selected={selection.has(node.path)}
-          onpointerdown={(e) => e.button === 0 && select(node, e)}
+          onpointerdown={(e) => onrowdown(node, e)}
           ondblclick={() => actions.openNode(node)}
           oncontextmenu={(e) => oncontextmenu(e, node)}
         >

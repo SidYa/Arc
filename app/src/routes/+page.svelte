@@ -4,18 +4,23 @@
   import { fade, fly } from "svelte/transition";
   import { listen } from "@tauri-apps/api/event";
   import { getCurrentWebview } from "@tauri-apps/api/webview";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   import { FileArchive, PackagePlus } from "@lucide/svelte";
   import { fitAccent } from "$lib/accent";
   import * as actions from "$lib/actions";
   import { api, type JobFinished, type JobProgress } from "$lib/api";
+  import { onJobFinished, onJobProgress } from "$lib/jobs";
   import { setLanguage, t } from "$lib/i18n.svelte";
   import { app, dialogs, openDialog, view } from "$lib/store.svelte";
   import ArchiveView from "$lib/components/ArchiveView.svelte";
   import Dialogs from "$lib/components/Dialogs.svelte";
-  import JobsPanel from "$lib/components/JobsPanel.svelte";
+  import TaskWindow from "$lib/components/TaskWindow.svelte";
   import StatusBar from "$lib/components/StatusBar.svelte";
   import TitleBar from "$lib/components/TitleBar.svelte";
   import Welcome from "$lib/components/Welcome.svelte";
+
+  /** Small progress windows ("task-N") share this page with the main window */
+  const isTask = getCurrentWindow().label !== "main";
 
   /** What the dragged files would do: open an archive or make a new one */
   let dragging = $state<"open" | "create" | null>(null);
@@ -62,19 +67,21 @@
       app.platform = state.platform;
       app.version = state.version;
       app.systemAccent = state.system_accent;
-      app.taskMode = state.task_mode;
       document.documentElement.classList.add(`platform-${state.platform}`);
       setLanguage(state.config.language);
       ready = true;
-      await takePendingOpen();
+      if (!isTask) await takePendingOpen();
     })();
+    // The task window listens for itself
+    if (isTask) return;
 
     unlisten.push(
       listen("open-pending", () => takePendingOpen()),
-      listen<JobProgress[]>("job-progress", (e) => actions.onJobProgress(e.payload)),
-      listen<JobFinished>("job-finished", (e) => actions.onJobFinished(e.payload)),
-      listen("close-requested", () => actions.requestClose()),
+      listen<JobProgress[]>("job-progress", (e) => onJobProgress(e.payload)),
+      listen<JobFinished>("job-finished", (e) => onJobFinished(e.payload)),
       getCurrentWebview().onDragDropEvent(async (e) => {
+        // Our own files being dragged out of the archive pass over the window too
+        if (app.draggingOut) return;
         if (e.payload.type === "enter") {
           const paths = e.payload.paths;
           dragging = paths.length && paths.every((p) => ARCHIVE.test(p)) ? "open" : "create";
@@ -104,7 +111,7 @@
 
   function onkeydown(e: KeyboardEvent) {
     // Shortcuts only when no dialog is open and the user is not typing
-    if (dialogs.length || e.target instanceof HTMLTextAreaElement) return;
+    if (isTask || dialogs.length || e.target instanceof HTMLTextAreaElement) return;
     const typing = e.target instanceof HTMLInputElement;
     const ctrl = e.ctrlKey || e.metaKey;
     const key = e.key.toLowerCase();
@@ -112,7 +119,7 @@
     else if (ctrl && key === "n") actions.pickFilesToArchive();
     else if (ctrl && key === "e" && view.archive) actions.extractCurrent("here", true);
     else if (ctrl && key === "w" && view.archive) actions.closeArchive();
-    else if (ctrl && key === "q") actions.requestClose();
+    else if (ctrl && key === "q") actions.quit();
     else if (ctrl && key === ",") openDialog("settings", {});
     else if (ctrl && key === "f" && view.archive) document.querySelector<HTMLInputElement>(".search input")?.focus();
     else if (!typing && (e.key === "F5" || (ctrl && key === "r"))) {
@@ -124,20 +131,23 @@
 
 <svelte:window {onkeydown} onkeydowncapture={blockBrowserKeys} oncontextmenu={(e) => e.preventDefault()} />
 
-<div class="app">
-  <TitleBar />
-  <main>
-    {#if ready}
-      {#if view.archive && !app.loading}
-        <ArchiveView />
-      {:else}
-        <Welcome />
+{#if isTask}
+  {#if ready}<TaskWindow />{/if}
+{:else}
+  <div class="app">
+    <TitleBar />
+    <main>
+      {#if ready}
+        {#if view.archive && !app.loading}
+          <ArchiveView />
+        {:else}
+          <Welcome />
+        {/if}
       {/if}
-    {/if}
-  </main>
-  <JobsPanel />
-  <StatusBar />
-</div>
+    </main>
+    <StatusBar />
+  </div>
+{/if}
 
 {#if dragging}
   <div class="drop" transition:fade={{ duration: 120 }}>

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { Lock } from "@lucide/svelte";
+  import { LoaderCircle, Lock } from "@lucide/svelte";
   import { formatSize } from "../format";
   import { t } from "../i18n.svelte";
   import { app, selection, view } from "../store.svelte";
@@ -21,6 +21,12 @@
     <span>{formatSize(archive.tree.size)}</span>
     {#if ratio != null && archive.listing.size}<span title={t("ratio")}>{formatSize(archive.listing.size)} · {ratio}%</span>{/if}
     {#if archive.listing.solid && archive.listing.format !== "tar.gz" && archive.listing.format !== "tar.xz"}<span>{t("solid")}</span>{/if}
+    {#if app.preparingDrag}
+      <span class="opening"><LoaderCircle size={12} class="spin" />{t("preparing_drag")}</span>
+    {/if}
+    {#if app.opening}
+      <span class="opening"><LoaderCircle size={12} class="spin" />{t("opening", app.opening)}</span>
+    {/if}
     {#if selected}
       <span class="selected">{t("selected", selected.count, formatSize(selected.size))}</span>
     {/if}
@@ -57,6 +63,24 @@
     display: inline-flex;
     margin-left: -8px;
     color: var(--accent);
+  }
+  .opening {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--accent);
+  }
+  .opening :global(.spin) {
+    flex-shrink: 0;
+    animation: spin 0.9s linear infinite;
+  }
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
   }
   .selected {
     margin-left: auto;

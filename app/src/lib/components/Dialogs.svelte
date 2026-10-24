@@ -1,12 +1,20 @@
 <!-- Shows the first dialog of the queue in store.svelte.ts. -->
 <script lang="ts">
+  import { invoke } from "@tauri-apps/api/core";
+  import { Heart, ScrollText } from "@lucide/svelte";
   import { t } from "../i18n.svelte";
   import { app, dialogs, type OpenDialog } from "../store.svelte";
+  import LicensesDialog from "./LicensesDialog.svelte";
   import Modal from "./Modal.svelte";
   import PasswordDialog from "./PasswordDialog.svelte";
   import Settings from "./Settings.svelte";
 
   const current = $derived(dialogs[0] as OpenDialog | undefined);
+  /** About > Licenses, shown on top of About */
+  let licenses = $state(false);
+  $effect(() => {
+    if (current?.kind !== "about") licenses = false;
+  });
   // Narrowing helper: the dialog's kind decides its props and result type
   const as = <K extends OpenDialog["kind"]>(d: OpenDialog, _kind: K) => d as unknown as OpenDialog<K>;
 </script>
@@ -45,11 +53,21 @@
           <div class="muted">{app.version}</div>
           <div class="muted small">{t("about_desc")}</div>
           <div class="muted small formats">ZIP · 7Z · TAR.GZ · TAR.XZ · RAR</div>
+          <div class="muted small">© 2026 Sergii Sidko</div>
         </div>
         {#snippet footer()}
+          <!-- PayPal on the left, Licenses and Close on the right, as in Farba -->
+          <button class="paypal" onclick={() => void invoke("open_donate")}><Heart size={15} />PayPal</button>
+          <button class="btn" onclick={() => (licenses = true)}><ScrollText size={15} />{t("licenses")}</button>
           <button class="btn primary" onclick={() => d.resolve()}>{t("close")}</button>
         {/snippet}
       </Modal>
+      {#if licenses}
+        <LicensesDialog onclose={() => (licenses = false)} />
+      {/if}
+    {:else if current.kind === "licenses"}
+      {@const d = as(current, "licenses")}
+      <LicensesDialog onclose={() => d.resolve()} />
     {/if}
   {/key}
 {/if}
@@ -80,5 +98,25 @@
   .formats {
     margin-top: 10px;
     letter-spacing: 0.4px;
+  }
+  .paypal {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 32px;
+    margin-right: auto;
+    padding: 0 16px;
+    border: none;
+    border-radius: 16px;
+    background: var(--paypal);
+    color: var(--paypal-text);
+    font-weight: 600;
+    transition: background 0.15s, transform 0.1s;
+  }
+  .paypal:hover {
+    background: var(--paypal-hover);
+  }
+  .paypal:active {
+    transform: scale(0.97);
   }
 </style>

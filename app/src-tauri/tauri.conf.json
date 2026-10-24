@@ -19,6 +19,8 @@
     "active": true,
     "targets": "all",
     "publisher": "Arc",
+    "license": "MIT",
+    "copyright": "© 2026 Sergii Sidko",
     "shortDescription": "Minimalist archiver",
     "category": "Utility",
     "icon": [

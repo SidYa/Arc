@@ -91,6 +91,35 @@ export async function openNode(node: Node) {
   }
 }
 
+/** Drag the selected entries to Explorer: only they are extracted (to a temporary folder),
+ *  then the system drag starts with them. Called while the mouse button is still held. */
+export async function dragOut() {
+  const archive = view.archive;
+  if (!archive || app.draggingOut || !selection.size) return;
+  app.draggingOut = true;
+  // Small files are ready at once: the indicator only shows for slow ones
+  const slow = setTimeout(() => (app.preparingDrag = true), 250);
+  try {
+    await api.dragOut(archive.path, archive.password, [...selection], view.cwd);
+  } catch (e) {
+    const code = String(e);
+    if (isPasswordError(code)) {
+      // The mouse button is released by now: the drag starts over once the password is known
+      clearTimeout(slow);
+      app.preparingDrag = false;
+      const password = await openDialog("password", { archive: archive.name, wrong: code === "wrong_password" });
+      if (password != null && view.archive?.path === archive.path) {
+        view.archive.password = password;
+        notify(t("drag_again"));
+      }
+    } else notify(errorText(e), "error");
+  } finally {
+    clearTimeout(slow);
+    app.preparingDrag = false;
+    app.draggingOut = false;
+  }
+}
+
 export function goUp() {
   if (!view.cwd) return;
   const i = view.cwd.lastIndexOf("/");

@@ -13,6 +13,10 @@ export const app = $state({
   loading: null as string | null,
   /** File being extracted from the archive to open it */
   opening: null as string | null,
+  /** Entries are being dragged out of the archive: drops on Arc itself are ours, not new files */
+  draggingOut: false,
+  /** The dragged entries are still being extracted */
+  preparingDrag: false,
 });
 
 // ---------------------------------------------------------------- open archive
@@ -59,6 +63,7 @@ interface DialogTypes {
   password: [{ archive: string; wrong: boolean }, string | null];
   settings: [{}, void];
   about: [{}, void];
+  licenses: [{}, void];
 }
 
 export type DialogKind = keyof DialogTypes;
