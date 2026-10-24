@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#a194ff"/>
+      <stop offset="1" stop-color="#6c5ce7"/>
+    </linearGradient>
+    <linearGradient id="lid" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#ece9ff"/>
+    </linearGradient>
+  </defs>
+  <rect x="64" y="64" width="896" height="896" rx="208" fill="url(#bg)"/>
+  <!-- box body -->
+  <rect x="252" y="400" width="520" height="392" rx="56" fill="#ffffff" opacity="0.94"/>
+  <!-- lid -->
+  <rect x="216" y="270" width="592" height="150" rx="52" fill="url(#lid)"/>
+  <!-- zipper -->
+  <g fill="#6c5ce7">
+    <rect x="480" y="292" width="64" height="26" rx="10"/>
+    <rect x="480" y="334" width="64" height="26" rx="10" opacity="0.75"/>
+    <rect x="480" y="376" width="64" height="26" rx="10" opacity="0.55"/>
+    <rect x="480" y="440" width="64" height="26" rx="10" opacity="0.45"/>
+  </g>
+  <!-- tab -->
+  <rect x="448" y="500" width="128" height="150" rx="40" fill="#6c5ce7"/>
+  <rect x="482" y="540" width="60" height="70" rx="22" fill="#ffffff"/>
+</svg>

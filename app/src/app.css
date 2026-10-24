@@ -1,0 +1,279 @@
+/* Arc design tokens (shared with Tormin). Dark is the default; html[data-theme="light"] switches. */
+:root {
+  --font: "Segoe UI Variable Text", "Segoe UI", "Inter", "Cantarell", "Ubuntu", system-ui, sans-serif;
+
+  --bg: #1b1b1f;
+  --bg-elevated: #26262b;
+  --surface: rgba(255, 255, 255, 0.035);
+  --surface-hover: rgba(255, 255, 255, 0.06);
+  --surface-active: rgba(255, 255, 255, 0.09);
+  --border: rgba(255, 255, 255, 0.08);
+  --border-strong: rgba(255, 255, 255, 0.14);
+
+  --text: #f3f3f6;
+  --text-2: rgba(243, 243, 246, 0.64);
+  --text-3: rgba(243, 243, 246, 0.4);
+
+  --accent: #8f7dff;
+  --accent-hover: #a194ff;
+  --accent-text: #ffffff;
+  --accent-soft: rgba(143, 125, 255, 0.16);
+  --accent-soft-strong: rgba(143, 125, 255, 0.26);
+  --blue: #47a3ff;
+  --green: #36c97d;
+  --red: #ff5c5c;
+  --red-soft: rgba(255, 92, 92, 0.14);
+  --accent-purple: #8f7dff;
+  --accent-green: #22b573;
+  --accent-orange: #f0861f;
+  --accent-blue: #2fa8e8;
+
+  --radius: 12px;
+  --radius-sm: 7px;
+  --shadow: 0 6px 18px rgba(0, 0, 0, 0.35), 0 0 0 1px var(--border);
+  --backdrop: rgba(0, 0, 0, 0.45);
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+
+  color-scheme: dark;
+}
+
+html[data-theme="light"] {
+  --bg: #f3f3f6;
+  --bg-elevated: #ffffff;
+  --surface: rgba(0, 0, 0, 0.025);
+  --surface-hover: rgba(0, 0, 0, 0.045);
+  --surface-active: rgba(0, 0, 0, 0.07);
+  --border: rgba(0, 0, 0, 0.08);
+  --border-strong: rgba(0, 0, 0, 0.15);
+
+  --text: #1b1b1f;
+  --text-2: rgba(27, 27, 31, 0.64);
+  --text-3: rgba(27, 27, 31, 0.42);
+
+  --accent: #6c5ce7;
+  --accent-hover: #5b4bd6;
+  --accent-soft: rgba(108, 92, 231, 0.12);
+  --accent-soft-strong: rgba(108, 92, 231, 0.2);
+  --blue: #1a7fe6;
+  --green: #1fa463;
+  --red: #e5484d;
+  --red-soft: rgba(229, 72, 77, 0.1);
+
+  --shadow: 0 6px 18px rgba(0, 0, 0, 0.12), 0 0 0 1px var(--border);
+  --backdrop: rgba(0, 0, 0, 0.25);
+
+  color-scheme: light;
+}
+
+/* Accent colors (purple is the default above); a custom one is set inline as --accent */
+html[data-accent="green"] {
+  --accent: var(--accent-green);
+}
+html[data-accent="orange"] {
+  --accent: var(--accent-orange);
+}
+html[data-accent="blue"] {
+  --accent: var(--accent-blue);
+}
+/* Monochrome: near-white on the dark theme, near-black on the light one */
+html[data-accent="mono"] {
+  --accent: #e4e4e8;
+  --accent-text: #1b1b1f;
+}
+html[data-accent="mono"][data-theme="light"] {
+  --accent: #2c2c31;
+  --accent-text: #ffffff;
+}
+html[data-accent] {
+  --accent-hover: color-mix(in srgb, var(--accent) 82%, #fff);
+  --accent-soft: color-mix(in srgb, var(--accent) 16%, transparent);
+  --accent-soft-strong: color-mix(in srgb, var(--accent) 26%, transparent);
+}
+html[data-accent][data-theme="light"] {
+  --accent-hover: color-mix(in srgb, var(--accent) 85%, #000);
+}
+
+/* Windows 11: let the Mica backdrop shine through */
+html.platform-windows {
+  --bg: rgba(27, 27, 31, 0.6);
+}
+html.platform-windows[data-theme="light"] {
+  --bg: rgba(243, 243, 246, 0.65);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.35;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: default;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}
+
+input,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 10px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: var(--text-3);
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ---- shared controls ---- */
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface-hover);
+  transition: background 0.15s, border-color 0.15s, transform 0.1s;
+  white-space: nowrap;
+}
+.btn:hover {
+  background: var(--surface-active);
+}
+.btn:active {
+  transform: scale(0.97);
+}
+.btn:disabled {
+  opacity: 0.45;
+  pointer-events: none;
+}
+.btn.primary {
+  background: var(--accent);
+  border-color: transparent;
+  color: var(--accent-text);
+  font-weight: 600;
+}
+.btn.primary:hover {
+  background: var(--accent-hover);
+}
+.btn.danger {
+  background: var(--red);
+  border-color: transparent;
+  color: #fff;
+  font-weight: 600;
+}
+.btn.ghost {
+  background: transparent;
+  border-color: transparent;
+}
+.btn.ghost:hover {
+  background: var(--surface-hover);
+}
+.btn.link {
+  background: none;
+  border: none;
+  padding: 0 4px;
+  height: auto;
+  color: var(--accent);
+}
+
+.input {
+  height: 34px;
+  width: 100%;
+  padding: 0 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.muted {
+  color: var(--text-2);
+}
+.small {
+  font-size: 12px;
+}
+.ellipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Fluent-style toggle switch */
+.switch {
+  appearance: none;
+  position: relative;
+  flex-shrink: 0;
+  width: 40px;
+  height: 22px;
+  margin: 0;
+  border-radius: 11px;
+  border: 1px solid var(--text-2);
+  background: transparent;
+  transition: background 0.18s, border-color 0.18s;
+}
+.switch::after {
+  content: "";
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--text-2);
+  transition: transform 0.18s var(--ease), background 0.18s, width 0.18s;
+}
+.switch:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.switch:checked::after {
+  transform: translateX(18px);
+  background: var(--accent-text);
+}
+.switch:active::after {
+  width: 15px;
+}
+.switch:disabled {
+  opacity: 0.4;
+}

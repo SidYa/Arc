@@ -1,0 +1,25 @@
+# Frontend (SvelteKit / Vite)
+app/node_modules/
+app/build/
+app/.svelte-kit/
+app/vite.config.*.timestamp-*
+
+# Rust / Tauri
+app/src-tauri/target/
+app/src-tauri/gen/schemas/
+
+# Editors and OS
+.vs/
+.idea/
+*.user
+.DS_Store
+Thumbs.db
+
+# Local files
+*.log
+.env
+.env.*
+!.env.example
+
+# Built installers
+dist/

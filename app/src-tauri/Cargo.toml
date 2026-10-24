@@ -1,0 +1,43 @@
+[package]
+name = "arc"
+version = "1.0.0"
+description = "Minimalist archiver"
+edition = "2024"
+
+[lib]
+# The `_lib` suffix avoids a name clash with the binary on Windows (cargo#8519)
+name = "arc_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-single-instance = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+dirs = "6"
+zip = { version = "9.1.0", features = ["aes-crypto"] }
+sevenz-rust2 = { version = "0.24.1", features = ["deflate", "zstd"] }
+tar = "0.4.46"
+flate2 = { version = "1.1.10", default-features = false, features = ["zlib-rs"] }
+liblzma = { version = "0.4.9", features = ["static", "parallel"] }
+unrar = "0.5.8"
+encoding_rs = "0.8.42"
+walkdir = "2.5.0"
+filetime = "0.2.29"
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+sys-locale = "0.3.2"
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+panic = "abort"
+strip = true
