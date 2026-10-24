@@ -36,6 +36,7 @@ drag = "2.1.1"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
+windows-sys = { version = "0.61", features = ["Win32_UI_Shell"] }
 
 [profile.release]
 codegen-units = 1
