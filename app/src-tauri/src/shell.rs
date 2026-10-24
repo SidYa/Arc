@@ -64,6 +64,7 @@ mod windows {
         Ok(())
     }
 
+    /// The Explorer context menu (Settings > Explorer context menu).
     pub fn register(language: &str) -> Res {
         let strings = Strings::new(language);
         let exe = std::env::current_exe()?.to_string_lossy().into_owned();
@@ -77,15 +78,6 @@ mod windows {
         for ext in ARCHIVE_EXTENSIONS {
             add_menu(&classes, &format!(r"SystemFileAssociations\.{ext}\shell\Arc"), &all, &exe, &strings)?;
         }
-
-        // "Open with" Arc, without taking over the default program
-        let (prog, _) = classes.create_subkey(PROG_ID)?;
-        prog.set_value("", &strings.t("archive_type"))?;
-        prog.create_subkey("DefaultIcon")?.0.set_value("", &format!("\"{exe}\",0"))?;
-        prog.create_subkey(r"shell\open\command")?.0.set_value("", &format!("\"{exe}\" \"%1\""))?;
-        for ext in ARCHIVE_EXTENSIONS {
-            classes.create_subkey(format!(r".{ext}\OpenWithProgids"))?.0.set_value(PROG_ID, &"")?;
-        }
         Ok(())
     }
 
@@ -93,14 +85,106 @@ mod windows {
         let classes = RegKey::predef(HKEY_CURRENT_USER).create_subkey(CLASSES)?.0;
         let _ = classes.delete_subkey_all(r"*\shell\Arc");
         let _ = classes.delete_subkey_all(r"Directory\shell\Arc");
-        let _ = classes.delete_subkey_all(PROG_ID);
         for ext in ARCHIVE_EXTENSIONS {
             let _ = classes.delete_subkey_all(format!(r"SystemFileAssociations\.{ext}\shell\Arc"));
-            if let Ok(key) = classes.open_subkey_with_flags(format!(r".{ext}\OpenWithProgids"), winreg::enums::KEY_ALL_ACCESS) {
-                let _ = key.delete_value(PROG_ID);
-            }
         }
         Ok(())
+    }
+
+    const CAPABILITIES: &str = r"Software\Arc\Capabilities";
+
+    /// Arc as a program that can open archives: "Open with", and its page in
+    /// Settings > Apps > Default apps. Done on every start; it changes no default.
+    pub fn register_app(language: &str) -> Res {
+        let strings = Strings::new(language);
+        let exe = std::env::current_exe()?.to_string_lossy().into_owned();
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        let classes = hkcu.create_subkey(CLASSES)?.0;
+
+        let (prog, _) = classes.create_subkey(PROG_ID)?;
+        prog.set_value("", &strings.t("archive_type"))?;
+        prog.create_subkey("DefaultIcon")?.0.set_value("", &format!("\"{exe}\",0"))?;
+        prog.create_subkey(r"shell\open\command")?.0.set_value("", &format!("\"{exe}\" \"%1\""))?;
+        for ext in ARCHIVE_EXTENSIONS {
+            classes.create_subkey(format!(r".{ext}\OpenWithProgids"))?.0.set_value(PROG_ID, &"")?;
+        }
+
+        let (caps, _) = hkcu.create_subkey(CAPABILITIES)?;
+        caps.set_value("ApplicationName", &"Arc")?;
+        caps.set_value("ApplicationDescription", &strings.t("about_desc"))?;
+        let (assoc, _) = caps.create_subkey("FileAssociations")?;
+        for ext in ARCHIVE_EXTENSIONS {
+            assoc.set_value(format!(".{ext}"), &PROG_ID)?;
+        }
+        hkcu.create_subkey(r"Software\RegisteredApplications")?.0.set_value("Arc", &CAPABILITIES)?;
+        Ok(())
+    }
+
+    /// Makes Arc the default for every archive type as far as a program may: the class default of
+    /// each extension points to Arc. The rest is the user's click in Settings (the caller opens it).
+    pub fn associate(language: &str) -> Res {
+        register_app(language)?;
+        let classes = RegKey::predef(HKEY_CURRENT_USER).create_subkey(CLASSES)?.0;
+        for ext in ARCHIVE_EXTENSIONS {
+            // Programs that read the class default directly (and older Windows) follow it.
+            // Explorer on Windows 10/11 only follows the user's choice (UserChoice / UserChoiceLatest),
+            // which only Windows itself may write: removing another program's choice doesn't make
+            // Arc the default, it only leaves the type without one. So choices are never touched.
+            classes.create_subkey(format!(".{ext}"))?.0.set_value("", &PROG_ID)?;
+        }
+        notify_associations();
+        Ok(())
+    }
+
+    /// Hands the archive types back: the class defaults that point to Arc are removed.
+    pub fn unassociate() -> Res {
+        let classes = RegKey::predef(HKEY_CURRENT_USER).create_subkey(CLASSES)?.0;
+        for ext in ARCHIVE_EXTENSIONS {
+            if let Ok(key) = classes.open_subkey_with_flags(format!(".{ext}"), winreg::enums::KEY_ALL_ACCESS)
+                && key.get_value::<String, _>("").is_ok_and(|p| p == PROG_ID)
+            {
+                let _ = key.delete_value("");
+            }
+        }
+        notify_associations();
+        Ok(())
+    }
+
+    fn notify_associations() {
+        use windows_sys::Win32::UI::Shell::{SHCNE_ASSOCCHANGED, SHCNF_IDLIST, SHChangeNotify};
+        unsafe { SHChangeNotify(SHCNE_ASSOCCHANGED as i32, SHCNF_IDLIST, std::ptr::null(), std::ptr::null()) };
+    }
+
+    /// What Windows really opens each archive type with (the user's choice included).
+    pub fn associations() -> Vec<super::Association> {
+        use windows_sys::Win32::UI::Shell::{ASSOCF_INIT_IGNOREUNKNOWN, ASSOCSTR_FRIENDLYAPPNAME, ASSOCSTR_PROGID, AssocQueryStringW};
+        let query = |ext: &str, what| -> Option<String> {
+            let assoc: Vec<u16> = format!(".{ext}").encode_utf16().chain([0]).collect();
+            let mut buf = vec![0u16; 512];
+            let mut len = buf.len() as u32;
+            let hr = unsafe {
+                AssocQueryStringW(ASSOCF_INIT_IGNOREUNKNOWN, what, assoc.as_ptr(), std::ptr::null(), buf.as_mut_ptr(), &mut len)
+            };
+            (hr == 0).then(|| String::from_utf16_lossy(&buf[..len.saturating_sub(1) as usize]))
+        };
+        ARCHIVE_EXTENSIONS
+            .iter()
+            .map(|ext| {
+                let prog_id = query(ext, ASSOCSTR_PROGID);
+                super::Association {
+                    ext: ext.to_string(),
+                    is_arc: prog_id.as_deref() == Some(PROG_ID),
+                    app: query(ext, ASSOCSTR_FRIENDLYAPPNAME).filter(|s| !s.is_empty()),
+                }
+            })
+            .collect()
+    }
+
+    /// Arc's page in Settings > Apps > Default apps: "Set default" there takes every type at once.
+    pub fn open_default_apps() {
+        let _ = std::process::Command::new("cmd")
+            .args(["/C", "start", "", "ms-settings:defaultapps?registeredAppUser=Arc"])
+            .spawn();
     }
 
     /// The accent color of Windows (Settings > Personalization > Colors) as #rrggbb.
@@ -112,8 +196,17 @@ mod windows {
     }
 }
 
+/// Which program opens one archive type.
+#[derive(serde::Serialize)]
+pub struct Association {
+    pub ext: String,
+    pub is_arc: bool,
+    /// Name of the program that opens it now
+    pub app: Option<String>,
+}
+
 #[cfg(windows)]
-pub use windows::{register, system_accent, unregister};
+pub use windows::{associate, associations, open_default_apps, register, register_app, system_accent, unassociate, unregister};
 
 #[cfg(not(windows))]
 pub fn register(_language: &str) -> std::io::Result<()> {
@@ -126,6 +219,42 @@ pub fn unregister() -> std::io::Result<()> {
 }
 
 #[cfg(not(windows))]
+pub fn register_app(_language: &str) -> std::io::Result<()> {
+    Ok(())
+}
+
+#[cfg(not(windows))]
+pub fn associate(_language: &str) -> std::io::Result<()> {
+    Ok(())
+}
+
+#[cfg(not(windows))]
+pub fn unassociate() -> std::io::Result<()> {
+    Ok(())
+}
+
+#[cfg(not(windows))]
+pub fn associations() -> Vec<Association> {
+    Vec::new()
+}
+
+#[cfg(not(windows))]
+pub fn open_default_apps() {}
+
+#[cfg(not(windows))]
 pub fn system_accent() -> Option<String> {
     None
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    /// Read-only: every archive type gets an answer, and the names come out readable.
+    #[test]
+    fn associations_are_queried() {
+        let list = super::associations();
+        assert_eq!(list.len(), crate::archive::ARCHIVE_EXTENSIONS.len());
+        for a in &list {
+            println!(".{:<4} arc={} app={:?}", a.ext, a.is_arc, a.app);
+        }
+    }
 }

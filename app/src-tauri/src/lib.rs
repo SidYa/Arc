@@ -285,7 +285,49 @@ fn set_config(state: State<AppState>, config: Config) -> Result<(), String> {
         let result = if config.context_menu { shell::register(&config.language) } else { shell::unregister() };
         result.map_err(|e| e.to_string())?;
     }
+    if language_changed {
+        // The archive type name shown by Explorer
+        shell::register_app(&config.language).map_err(|e| e.to_string())?;
+    }
     Ok(())
+}
+
+/// Which program opens each archive type now.
+#[tauri::command]
+async fn associations() -> Vec<shell::Association> {
+    tauri::async_runtime::spawn_blocking(shell::associations).await.unwrap_or_default()
+}
+
+/// Settings > "Make Arc the default": as far as Windows allows; the types it keeps for another
+/// program are returned, and Arc's page in Settings opens for them.
+#[tauri::command]
+async fn associate(state: State<'_, AppState>) -> Result<Vec<shell::Association>, String> {
+    let language = state.config.lock().unwrap().language.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        shell::associate(&language).map_err(|e| e.to_string())?;
+        let result = shell::associations();
+        if result.iter().any(|a| !a.is_arc) {
+            shell::open_default_apps();
+        }
+        Ok(result)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn unassociate() -> Result<Vec<shell::Association>, String> {
+    tauri::async_runtime::spawn_blocking(|| {
+        shell::unassociate().map_err(|e| e.to_string())?;
+        Ok(shell::associations())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+fn open_default_apps() {
+    shell::open_default_apps();
 }
 
 /// About > PayPal: the donation page in the default browser. The address is fixed here,
@@ -500,6 +542,9 @@ pub fn run() {
             let _ = std::fs::remove_dir_all(config::temp_dir());
 
             // The exe path changes with updates and reinstalls: keep the registry current
+            if let Err(e) = shell::register_app(&config.language) {
+                log(&format!("App registration failed: {e}"));
+            }
             if config.context_menu
                 && let Err(e) = shell::register(&config.language)
             {
@@ -559,6 +604,10 @@ pub fn run() {
             reveal,
             set_config,
             open_donate,
+            associations,
+            associate,
+            unassociate,
+            open_default_apps,
             open_url,
             quit,
         ])

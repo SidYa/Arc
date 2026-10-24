@@ -1,10 +1,48 @@
 <!-- Preferences: every change is applied and saved immediately, as in Tormin. -->
 <script lang="ts">
-  import { api, WRITABLE, type Config } from "../api";
+  import { Check, Link, Unlink } from "@lucide/svelte";
+  import { onMount } from "svelte";
+  import { api, WRITABLE, type Association, type Config } from "../api";
   import { languages, setLanguage, t } from "../i18n.svelte";
   import { app, notify } from "../store.svelte";
   import Modal from "./Modal.svelte";
   import Select from "./Select.svelte";
+
+  // File associations: what Windows opens each archive type with right now
+  let associations = $state<Association[]>([]);
+  let associating = $state(false);
+  const allArc = $derived(associations.length > 0 && associations.every((a) => a.is_arc));
+  const anyArc = $derived(associations.some((a) => a.is_arc));
+
+  onMount(async () => {
+    if (app.platform === "windows") associations = await api.associations();
+  });
+
+  async function associate() {
+    associating = true;
+    try {
+      associations = await api.associate();
+      // Windows keeps some choices for itself: Arc's page in Settings is open for those
+      notify(associations.every((a) => a.is_arc) ? t("assoc_done") : t("assoc_settings"));
+    } catch (e) {
+      notify(String(e), "error");
+    } finally {
+      associating = false;
+    }
+  }
+
+  async function unassociate() {
+    try {
+      associations = await api.unassociate();
+    } catch (e) {
+      notify(String(e), "error");
+    }
+  }
+
+  // Back from Settings: the choices made there show up
+  function onfocus() {
+    if (app.platform === "windows" && associations.length) api.associations().then((a) => (associations = a));
+  }
 
   interface Props {
     onclose: () => void;
@@ -42,6 +80,8 @@
     />
   </label>
 {/snippet}
+
+<svelte:window {onfocus} />
 
 <Modal title={t("preferences")} wide oncancel={onclose}>
   <section>
@@ -153,6 +193,27 @@
     <section>
       <h3>Windows</h3>
       <div class="card">
+        <div class="row">
+          <div class="label">
+            <div>{t("assoc")}</div>
+            <div class="desc">{t("assoc_desc")}</div>
+          </div>
+          <div class="assoc-buttons">
+            {#if anyArc}
+              <button class="btn" title={t("assoc_remove")} aria-label={t("assoc_remove")} onclick={unassociate}><Unlink size={15} /></button>
+            {/if}
+            <button class="btn" class:primary={!allArc} disabled={associating} onclick={associate}>
+              {#if allArc}<Check size={15} />{t("assoc_all_done")}{:else}<Link size={15} />{t("assoc_make_default")}{/if}
+            </button>
+          </div>
+          {#if associations.length}
+            <div class="exts">
+              {#each associations as a (a.ext)}
+                <span class="ext" class:on={a.is_arc} title={a.is_arc ? "Arc" : (a.app ?? t("assoc_none"))}>.{a.ext}</span>
+              {/each}
+            </div>
+          {/if}
+        </div>
         {@render toggle("context_menu", t("context_menu"), t("context_menu_desc"))}
       </div>
     </section>
@@ -257,6 +318,29 @@
   .swatch.active {
     border-color: var(--bg-elevated);
     box-shadow: 0 0 0 2px var(--swatch);
+  }
+  .assoc-buttons {
+    display: flex;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+  .exts {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    width: 100%;
+  }
+  .ext {
+    padding: 1px 7px;
+    border-radius: 6px;
+    background: var(--surface-active);
+    color: var(--text-3);
+    font-size: 11.5px;
+    font-weight: 600;
+  }
+  .ext.on {
+    background: var(--accent-soft);
+    color: var(--accent);
   }
   /* The Windows accent: an inner ring tells it from the presets */
   .swatch.system::after {

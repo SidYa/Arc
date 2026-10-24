@@ -23,3 +23,7 @@ Thumbs.db
 
 # Built installers
 dist/
+
+# AI instruments
+.claude
+CLAUDE.md

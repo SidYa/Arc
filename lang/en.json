@@ -151,6 +151,14 @@
   "conflict_skip": "Skip",
   "open_folder_after": "Open the folder after extracting",
   "open_folder_after_desc": "Shows the result in Explorer",
+  "assoc": "File associations",
+  "assoc_desc": "Open ZIP, 7Z, RAR, TAR, GZ and XZ archives in Arc by double-click. Highlighted types already open in Arc.",
+  "assoc_make_default": "Make default",
+  "assoc_all_done": "Arc is the default",
+  "assoc_remove": "Remove the associations",
+  "assoc_none": "No program",
+  "assoc_done": "Arc now opens all archive types",
+  "assoc_settings": "Windows lets only you choose the default: on Arc’s page in Settings click “Choose a default” next to each type and pick Arc",
   "context_menu": "Explorer context menu",
   "context_menu_desc": "Arc submenu: add to archive, with password, extract here, extract to folder. In Windows 11 it is under “Show more options”."
 }

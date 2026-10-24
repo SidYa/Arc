@@ -59,6 +59,13 @@ export interface OpenRequest {
   paths: string[];
 }
 
+/** Which program opens one archive type */
+export interface Association {
+  ext: string;
+  is_arc: boolean;
+  app: string | null;
+}
+
 export interface PathInfo {
   path: string;
   name: string;
@@ -117,5 +124,9 @@ export const api = {
   openTask: (task: Task) => invoke<void>("open_task", { task }),
   reveal: (path: string) => invoke<void>("reveal", { path }),
   setConfig: (config: Config) => invoke<void>("set_config", { config }),
+  associations: () => invoke<Association[]>("associations"),
+  associate: () => invoke<Association[]>("associate"),
+  unassociate: () => invoke<Association[]>("unassociate"),
+  openDefaultApps: () => invoke<void>("open_default_apps"),
   quit: () => invoke<void>("quit"),
 };

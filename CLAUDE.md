@@ -43,6 +43,11 @@
 - `app/scripts/gen-licenses.mjs` (адаптація з Farba) генерує `app/static/licenses.json` під час `npm run build` (або `npm run licenses`): Rust-крейти з `cargo metadata`, JS-залежності, вручну — UnRAR і XZ Utils з текстами з вихідників крейтів. Нова C/C++ бібліотека → додати в `manual`.
 - Тіні — як у Farba: `--shadow: 0 2px 6px` (0.35 темна / 0.16 світла) + тонка рамка.
 
+## Асоціації файлів (Налаштування → Windows)
+- `register_app` при кожному запуску: ProgID `Arc.Archive`, OpenWithProgids, `Software\Arc\Capabilities` + `RegisteredApplications` (сторінка Arc у «Програмах за замовчуванням»). Не залежить від перемикача контекстного меню.
+- Кнопка «Зробити за замовчуванням» (`associate`): класові значення `.ext → Arc.Archive` і, якщо якийсь тип ще не Arc, відкриває `ms-settings:defaultapps?registeredAppUser=Arc`. Стан кожного розширення — `AssocQueryString(ASSOCSTR_PROGID)`; оновлюється, коли вікно знову отримує фокус.
+- **Перевірено на машині користувача:** Windows 10/11 Explorer слухає лише `UserChoice`/`UserChoiceLatest` (у Win11 ProgId — у вкладеному ключі `UserChoiceLatest\ProgId`), записати їх може тільки Windows (хеш + UCPD). Видалення чужого вибору НЕ робить Arc типовим, а лишає тип без програми — тому вибір користувача ніколи не чіпаємо. Злом хешу (SetUserFTA) — ні. На цій збірці Windows кнопки «Set default для всіх» немає: користувач вибирає Arc біля кожного типу.
+
 ## Контекстне меню Explorer (як у 7-Zip)
 Реєстр `HKCU\Software\Classes` (без прав адміністратора), каскадне меню «Arc»:
 Архівувати · Запаролити · Розархівувати · Розархівувати в папку.
