@@ -18,12 +18,17 @@ fn map_error(e: UnrarError, has_password: bool) -> Error {
     }
 }
 
-fn archive<'a>(path: &'a Path, password: Option<&'a str>) -> Archive<'a> {
+/// The unrar crate rewrites any `name.<digits>.rar` into a guessed first volume of a multipart set
+/// (`movie.2024.rar` -> `movie.0001.rar`, which does not exist). Keep that substitution only when
+/// part 1 is really on disk, otherwise open the archive as it is.
+fn with_archive<R>(path: &Path, password: Option<&str>, f: impl for<'a> FnOnce(Archive<'a>) -> R) -> R {
+    let part = Archive::new(path).first_part_option().filter(|p| p.as_path() != path && p.exists());
+    let file: &Path = part.as_deref().unwrap_or(path);
     let archive = match password {
-        Some(p) => Archive::with_password(path, p),
-        None => Archive::new(path),
+        Some(p) => Archive::with_password(file, p),
+        None => Archive::new(file),
     };
-    archive.as_first_part()
+    f(archive)
 }
 
 fn unix_time(dos: u32) -> Option<i64> {
@@ -32,7 +37,9 @@ fn unix_time(dos: u32) -> Option<i64> {
 
 pub fn list(path: &Path, password: Option<&str>) -> Result<Listing> {
     let has_password = password.is_some();
-    let opened = archive(path, password).open_for_listing().map_err(|e| map_error(e, has_password))?;
+    let opened = with_archive(path, password, |a| {
+        a.open_for_listing().map_err(|e| map_error(e, has_password))
+    })?;
     let solid = opened.is_solid();
     let mut entries: Vec<Entry> = Vec::new();
     let mut encrypted = opened.has_encrypted_headers();
@@ -67,7 +74,9 @@ pub fn extract(path: &Path, opts: &ExtractOptions, progress: &Progress) -> Resul
     let listing = list(path, opts.password)?;
     progress.set_total(listing.entries.iter().filter(|e| !e.is_dir && opts.target(&e.path).is_some()).map(|e| e.size).sum());
 
-    let mut cursor = archive(path, opts.password).open_for_processing().map_err(|e| map_error(e, has_password))?;
+    let mut cursor = with_archive(path, opts.password.as_deref(), |a| {
+        a.open_for_processing().map_err(|e| map_error(e, has_password))
+    })?;
     let mut last_name = String::new();
     loop {
         progress.check()?;

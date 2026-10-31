@@ -284,6 +284,17 @@ fn rar_list_and_extract() {
 }
 
 #[test]
+fn rar_numeric_name_is_not_a_volume() {
+    // UnRAR treats "movie.2024.rar" as multipart VOL1 "movie.0001.rar"; keep the name as is
+    let tmp = TempDir::new("rar-num");
+    let archive = tmp.0.join("RealBiomes V2.0 UE5.3.rar");
+    fs::copy(fixture("unicode.rar"), &archive).unwrap();
+    let listing = list(&archive, None, &Progress::default()).unwrap();
+    assert!(!listing.entries.is_empty());
+    extract(&archive, &options(&tmp.0, None), &Progress::default()).unwrap();
+}
+
+#[test]
 fn rar_password() {
     // Encrypted data, readable names
     let path = fixture("crypted.rar");
