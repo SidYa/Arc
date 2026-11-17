@@ -161,5 +161,5 @@
   "assoc_done": "Arc now opens all archive types",
   "assoc_settings": "Windows lets only you choose the default: on Arc’s page in Settings click “Choose a default” next to each type and pick Arc",
   "context_menu": "Explorer context menu",
-  "context_menu_desc": "Arc submenu: add to archive, with password, extract here, extract to folder. In Windows 11 it is under “Show more options”."
+  "context_menu_desc": "Arc submenu: add to archive, with password, extract here, extract to folder."
 }

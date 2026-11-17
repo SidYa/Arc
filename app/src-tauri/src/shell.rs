@@ -70,25 +70,54 @@ mod windows {
         let exe = std::env::current_exe()?.to_string_lossy().into_owned();
         let classes = RegKey::predef(HKEY_CURRENT_USER).create_subkey(CLASSES)?.0;
         let all: Vec<_> = PACK.iter().chain(UNPACK.iter()).copied().collect();
+        let (menu, _) = RegKey::predef(HKEY_CURRENT_USER).create_subkey(MENU)?;
 
+        // Windows 11 with Arc's package registered (msix/register-shell.ps1 sets Packaged): its menu
+        // shows in both the new and the classic menu, the registry verbs would be a second "Arc"
+        if menu.get_value::<u32, _>("Packaged").is_ok_and(|v| v != 0) {
+            remove_verbs(&classes);
+        } else {
+            add_verbs(&classes, &all, &exe, &strings)?;
+        }
+
+        // The menu handler (app/shellext) reads its texts here
+        menu.set_value("Exe", &exe)?;
+        menu.set_value("Extensions", &ARCHIVE_EXTENSIONS.join(";"))?;
+        for (name, key) in [("Add", "menu_add"), ("AddPassword", "menu_add_password"), ("ExtractHere", "menu_extract_here"), ("ExtractFolder", "menu_extract_folder")] {
+            menu.set_value(name, &strings.t(key))?;
+        }
+        menu.set_value("Enabled", &1u32)?;
+        Ok(())
+    }
+
+    fn add_verbs(classes: &RegKey, all: &[(&str, &str, &str)], exe: &str, strings: &Strings) -> Res {
         // Any file and folder: pack. Archives get the full menu under the same verb name,
         // which Explorer prefers over the generic one, so it appears once.
-        add_menu(&classes, r"*\shell\Arc", &PACK, &exe, &strings)?;
-        add_menu(&classes, r"Directory\shell\Arc", &PACK, &exe, &strings)?;
+        add_menu(classes, r"*\shell\Arc", &PACK, exe, strings)?;
+        add_menu(classes, r"Directory\shell\Arc", &PACK, exe, strings)?;
         for ext in ARCHIVE_EXTENSIONS {
-            add_menu(&classes, &format!(r"SystemFileAssociations\.{ext}\shell\Arc"), &all, &exe, &strings)?;
+            add_menu(classes, &format!(r"SystemFileAssociations\.{ext}\shell\Arc"), all, exe, strings)?;
         }
         Ok(())
     }
 
+    /// Settings of the Windows 11 menu handler.
+    const MENU: &str = r"Software\Arc\Menu";
+
     pub fn unregister() -> Res {
-        let classes = RegKey::predef(HKEY_CURRENT_USER).create_subkey(CLASSES)?.0;
+        if let Ok(menu) = RegKey::predef(HKEY_CURRENT_USER).open_subkey_with_flags(MENU, winreg::enums::KEY_SET_VALUE) {
+            menu.set_value("Enabled", &0u32)?;
+        }
+        remove_verbs(&RegKey::predef(HKEY_CURRENT_USER).create_subkey(CLASSES)?.0);
+        Ok(())
+    }
+
+    fn remove_verbs(classes: &RegKey) {
         let _ = classes.delete_subkey_all(r"*\shell\Arc");
         let _ = classes.delete_subkey_all(r"Directory\shell\Arc");
         for ext in ARCHIVE_EXTENSIONS {
             let _ = classes.delete_subkey_all(format!(r"SystemFileAssociations\.{ext}\shell\Arc"));
         }
-        Ok(())
     }
 
     const CAPABILITIES: &str = r"Software\Arc\Capabilities";

@@ -73,7 +73,6 @@ pub fn run(app: &AppHandle, window: &WebviewWindow, id: u32, req: DragRequest) -
         let _ = OleInitialize(None);
         // Copy or move: the files are temporary, so on the same disk Explorer just moves them (instant)
         let result = SHDoDragDrop(Some(hwnd), &data, &source, DROPEFFECT_COPY | DROPEFFECT_MOVE);
-        crate::log(&format!("drag: SHDoDragDrop {result:?}"));
         drop(source);
         // The drop goes ahead only once the extraction has succeeded
         let outcome = state.result.borrow_mut().take();
@@ -135,7 +134,6 @@ impl IDropSource_Impl for DropSource_Impl {
             return S_OK;
         }
         // Released: nothing accepts the files here, or it's Arc's own window
-        crate::log(&format!("drag: released, effect {:?}, own window {}", self.0.effect.get(), over_own_window()));
         if self.0.effect.get() == DROPEFFECT_NONE || over_own_window() {
             return DRAGDROP_S_CANCEL;
         }
@@ -144,7 +142,6 @@ impl IDropSource_Impl for DropSource_Impl {
         let result = extract();
         self.0.busy.set(false);
         let ok = result.is_ok();
-        crate::log(&format!("drag: extracted {result:?}"));
         *self.0.result.borrow_mut() = Some(result);
         if ok { DRAGDROP_S_DROP } else { DRAGDROP_S_CANCEL }
     }

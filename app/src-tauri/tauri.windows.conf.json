@@ -3,6 +3,12 @@
     "targets": [
       "nsis"
     ],
+    "resources": {
+      "shell/arc_shell.dll": "arc_shell.dll",
+      "shell/Arc.msix": "Arc.msix",
+      "shell/arc.cer": "arc.cer",
+      "msix/register-shell.ps1": "register-shell.ps1"
+    },
     "windows": {
       "nsis": {
         "installMode": "currentUser",

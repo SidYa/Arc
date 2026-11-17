@@ -3,6 +3,8 @@
 use std::fs::{self, File};
 use std::io::{BufReader, Seek, Write};
 use std::path::Path;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use zip::result::ZipError;
 use zip::write::{FileOptions, SimpleFileOptions};
@@ -154,32 +156,76 @@ pub fn extract(path: &Path, opts: &ExtractOptions, progress: &Progress) -> Resul
     }
     progress.set_total(work.iter().map(|w| w.3).sum());
 
-    for (index, relative, is_dir, _, modified) in work {
-        progress.check()?;
-        progress.set_current(&relative);
+    let mut files = Vec::with_capacity(work.len());
+    for (index, relative, is_dir, size, modified) in work {
         if is_dir {
             if let Some(dir) = opts.dir_path(&relative) {
                 fs::create_dir_all(dir)?;
             }
-            continue;
-        }
-        let mut entry = match opts.password {
-            Some(password) if archive.by_index_data(index).map_err(map_error)?.encrypted() => {
-                archive.by_index_decrypt(index, password.as_bytes())
-            }
-            _ => archive.by_index(index),
-        }
-        .map_err(map_error)?;
-        let result = super::write_file(opts, &relative, modified, |out| super::copy(&mut entry, out, progress).map(drop));
-        if let Err(e) = result {
-            // A ZipCrypto password is checked by one byte only: a wrong one shows up as bad data
-            if opts.password.is_some() && e.kind() == std::io::ErrorKind::InvalidData {
-                return Err(Error::WrongPassword);
-            }
-            return Err(e.into());
+        } else {
+            files.push(Work { index, relative, size, modified });
         }
     }
-    Ok(())
+
+    // Every entry is compressed on its own: several threads, each with its own handle, take the
+    // next one from a shared queue (biggest first, so one large file doesn't finish last alone)
+    files.sort_unstable_by_key(|w| std::cmp::Reverse(w.size));
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(MAX_THREADS).min(files.len());
+    if threads <= 1 {
+        return files.iter().try_for_each(|w| extract_one(&mut archive, w, opts, progress));
+    }
+    drop(archive);
+    let next = AtomicUsize::new(0);
+    let failed: Mutex<Option<Error>> = Mutex::new(None);
+    std::thread::scope(|scope| {
+        for _ in 0..threads {
+            scope.spawn(|| {
+                let result = open(path).and_then(|mut archive| {
+                    while failed.lock().unwrap().is_none() {
+                        let Some(w) = files.get(next.fetch_add(1, Ordering::Relaxed)) else { break };
+                        extract_one(&mut archive, w, opts, progress)?;
+                    }
+                    Ok(())
+                });
+                if let Err(e) = result {
+                    failed.lock().unwrap().get_or_insert(e);
+                }
+            });
+        }
+    });
+    match failed.into_inner().unwrap() {
+        Some(e) => Err(e),
+        None => Ok(()),
+    }
+}
+
+/// Threads for extracting: more only add seeking on the disk
+const MAX_THREADS: usize = 8;
+
+struct Work {
+    index: usize,
+    relative: String,
+    size: u64,
+    modified: Option<i64>,
+}
+
+fn extract_one(archive: &mut ZipArchive<BufReader<File>>, w: &Work, opts: &ExtractOptions, progress: &Progress) -> Result<()> {
+    progress.check()?;
+    progress.set_current(&w.relative);
+    let mut entry = match opts.password {
+        Some(password) if archive.by_index_data(w.index).map_err(map_error)?.encrypted() => {
+            archive.by_index_decrypt(w.index, password.as_bytes())
+        }
+        _ => archive.by_index(w.index),
+    }
+    .map_err(map_error)?;
+    let result = super::write_file(opts, &w.relative, w.modified, |out| super::copy(&mut entry, out, progress).map(drop));
+    match result {
+        Ok(_) => Ok(()),
+        // A ZipCrypto password is checked by one byte only: a wrong one shows up as bad data
+        Err(e) if opts.password.is_some() && e.kind() == std::io::ErrorKind::InvalidData => Err(Error::WrongPassword),
+        Err(e) => Err(e.into()),
+    }
 }
 
 fn zip_time(source: &Source) -> DateTime {

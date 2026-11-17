@@ -24,4 +24,6 @@ if (-not $Build -and $identity.IsInRole([Security.Principal.WindowsBuiltInRole]:
 
 Set-Location $PSScriptRoot
 if (-not (Test-Path node_modules)) { npm install }
+# The Windows 11 context menu (DLL + signed package): bundled as resources, so needed by dev too
+& (Join-Path $PSScriptRoot 'scripts\build-shell.ps1')
 if ($Build) { npm run tauri build } else { npm run tauri dev }

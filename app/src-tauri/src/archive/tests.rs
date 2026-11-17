@@ -56,7 +56,7 @@ fn round_trip(format: Format, password: Option<&'static str>) {
     let src = sample(&tmp.0);
     let archive = tmp.0.join(format!("out.{}", format.extension()));
     let opts = CreateOptions { format, level: 5, password: password.map(String::from), encrypt_names: false };
-    create(&[src.clone()], &archive, &opts, &Progress::default()).unwrap();
+    create(std::slice::from_ref(&src), &archive, &opts, &Progress::default()).unwrap();
     assert!(archive.exists());
 
     let listing = list(&archive, password, &Progress::default()).unwrap();
@@ -311,4 +311,26 @@ fn rar_password() {
     let path = fixture("comment-hpw-password.rar");
     assert!(matches!(list(&path, None, &Progress::default()), Err(Error::PasswordRequired)));
     assert!(!list(&path, Some("password"), &Progress::default()).unwrap().entries.is_empty());
+}
+
+/// Many entries of different sizes through the parallel ZIP extraction: every one complete and in place.
+#[test]
+fn zip_many_files_parallel() {
+    let tmp = TempDir::new("zip-many");
+    let src = tmp.0.join("many");
+    for i in 0..300u32 {
+        let dir = src.join(format!("d{}", i % 7));
+        fs::create_dir_all(&dir).unwrap();
+        let data: Vec<u8> = (0..(i * 997 % 70_000)).map(|j| (j.wrapping_mul(i + 3) % 253) as u8).collect();
+        fs::write(dir.join(format!("f{i}.bin")), data).unwrap();
+    }
+    let archive = tmp.0.join("many.zip");
+    let opts = CreateOptions { format: Format::Zip, level: 1, password: None, encrypt_names: false };
+    create(std::slice::from_ref(&src), &archive, &opts, &Progress::default()).unwrap();
+    let out = tmp.0.join("out");
+    let progress = Progress::default();
+    extract(&archive, &options(&out, None), &progress).unwrap();
+    assert_same(&src, &out);
+    let (done, total) = progress.snapshot();
+    assert_eq!(done, total);
 }

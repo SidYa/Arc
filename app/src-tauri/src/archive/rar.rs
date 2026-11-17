@@ -80,7 +80,7 @@ pub fn extract(path: &Path, opts: &ExtractOptions, progress: &Progress) -> Resul
         return Ok(());
     }
 
-    let mut cursor = with_archive(path, opts.password.as_deref(), |a| {
+    let mut cursor = with_archive(path, opts.password, |a| {
         a.open_for_processing().map_err(|e| map_error(e, has_password))
     })?;
     let mut last_name = String::new();

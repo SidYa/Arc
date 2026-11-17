@@ -43,12 +43,28 @@ struct OpenRequest {
 fn parse_args(args: &[String], cwd: &Path) -> Option<OpenRequest> {
     let mut action = "open";
     let mut paths = Vec::new();
-    for arg in args.iter().skip(1) {
+    let mut args = args.iter().skip(1);
+    while let Some(arg) = args.next() {
         match arg.as_str() {
             "--add" => action = "add",
             "--add-password" => action = "add_password",
             "--extract-here" => action = "extract_here",
             "--extract-folder" => action = "extract_folder",
+            // The Windows 11 menu (app/shellext): every selected path in a temporary file, one per line
+            "--list" => {
+                if let Some(list) = args.next() {
+                    let list = PathBuf::from(list.trim_matches('"'));
+                    // Only our own lists: the file is deleted afterwards
+                    let ours = list.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with("arc-menu-") && n.ends_with(".txt"));
+                    if !ours {
+                        continue;
+                    }
+                    if let Ok(text) = std::fs::read_to_string(&list) {
+                        paths.extend(text.lines().map(str::trim).filter(|l| !l.is_empty()).map(String::from));
+                    }
+                    let _ = std::fs::remove_file(&list);
+                }
+            }
             a if a.starts_with("--") => {}
             path => {
                 let path = PathBuf::from(path.trim_matches('"'));
@@ -568,6 +584,8 @@ pub fn run() {
     // anything else, and the batch runs in its own process, apart from an open main window
     #[cfg(windows)]
     let (request, menu) = match request {
+        // The Windows 11 menu hands over every path at once
+        Some(req) if req.action != "open" && args.iter().any(|a| a == "--list") => (Some(req), true),
         Some(req) if req.action != "open" => match menubatch::gather(&req.action, req.paths) {
             Some(paths) => (Some(OpenRequest { action: req.action, paths }), true),
             None => return,

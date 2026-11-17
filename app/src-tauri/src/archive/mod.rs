@@ -302,11 +302,21 @@ impl<T: Write> Write for Counted<'_, T> {
 
 /// Larger chunks than io::copy: fewer progress updates and syscalls.
 pub fn copy(reader: &mut dyn Read, writer: &mut dyn Write, progress: &Progress) -> io::Result<u64> {
-    let mut buf = vec![0u8; 256 * 1024];
+    // One buffer per thread: archives of thousands of small files would allocate it for each
+    thread_local! {
+        static BUF: std::cell::RefCell<Vec<u8>> = std::cell::RefCell::new(vec![0u8; 256 * 1024]);
+    }
+    BUF.with(|buf| match buf.try_borrow_mut() {
+        Ok(mut buf) => copy_with(reader, writer, progress, &mut buf),
+        Err(_) => copy_with(reader, writer, progress, &mut vec![0u8; 256 * 1024]),
+    })
+}
+
+fn copy_with(reader: &mut dyn Read, writer: &mut dyn Write, progress: &Progress, buf: &mut [u8]) -> io::Result<u64> {
     let mut total = 0;
     loop {
         progress.check()?;
-        let n = match reader.read(&mut buf) {
+        let n = match reader.read(buf) {
             Ok(0) => return Ok(total),
             Ok(n) => n,
             Err(e) if e.kind() == io::ErrorKind::Interrupted && e.to_string() != "cancelled" => continue,
