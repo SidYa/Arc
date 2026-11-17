@@ -45,20 +45,25 @@ pub enum JobSpec {
         /// Folder in the archive the items are in
         #[serde(default)]
         base: String,
+        /// File entries the items cover (from the listing): streams stop early
+        #[serde(default)]
+        expected_files: Option<usize>,
     },
     Open {
         archive: String,
         password: Option<String>,
         item: String,
+        #[serde(default)]
+        expected_files: Option<usize>,
     },
 }
 
 #[derive(Serialize, Clone)]
-struct ProgressEvent {
-    id: u32,
-    done: u64,
-    total: u64,
-    current: String,
+pub struct ProgressEvent {
+    pub id: u32,
+    pub done: u64,
+    pub total: u64,
+    pub current: String,
 }
 
 #[derive(Serialize, Clone)]
@@ -95,6 +100,17 @@ impl Jobs {
         for p in self.running.lock().unwrap().values() {
             p.cancel();
         }
+    }
+
+    /// Progress of work run outside `start` (dragging out), reported and cancellable like a job
+    pub fn register(&self, id: u32) -> Arc<Progress> {
+        let progress = Arc::new(Progress::default());
+        self.running.lock().unwrap().insert(id, progress.clone());
+        progress
+    }
+
+    pub fn unregister(&self, id: u32) {
+        self.running.lock().unwrap().remove(&id);
     }
 
     pub fn is_busy(&self) -> bool {
@@ -136,41 +152,76 @@ fn run(app: &AppHandle, spec: &JobSpec, conflict: Conflict, progress: &Progress)
             archive::create(&sources, &dest, options, progress)?;
             Ok(dest)
         }
-        JobSpec::Extract { archive: path, dest, mode, password, items, base } => {
+        JobSpec::Extract { archive: path, dest, mode, password, items, base, expected_files } => {
             let path = PathBuf::from(path);
             let parent = path.parent().map(Path::to_path_buf).unwrap_or_default();
             let items = items.as_ref().map(|i| i.iter().cloned().collect::<HashSet<_>>());
+            // The hint only means something for a selection
+            let expected_files = items.as_ref().and(*expected_files);
             match mode {
-                ExtractMode::Folder => extract_to_folder(&path, &parent, password.as_deref(), items, base, progress),
+                ExtractMode::Folder => {
+                    extract_to_folder(&path, &parent, password.as_deref(), items, base, expected_files, progress)
+                }
                 _ => {
                     let dest = if *mode == ExtractMode::Here { parent } else { PathBuf::from(dest) };
-                    let opts = ExtractOptions { dest: &dest, password: password.as_deref(), items, base: base.clone(), conflict };
+                    let opts = ExtractOptions {
+                        dest: &dest,
+                        password: password.as_deref(),
+                        items,
+                        base: base.clone(),
+                        conflict,
+                        expected_files,
+                    };
                     archive::extract(&path, &opts, progress)?;
                     Ok(dest)
                 }
             }
         }
-        JobSpec::Open { archive: path, password, item } => {
-            let path = PathBuf::from(path);
-            let dest = temp_folder(&path);
-            let base = item.rsplit_once('/').map(|(dir, _)| dir.to_string()).unwrap_or_default();
-            let opts = ExtractOptions {
-                dest: &dest,
-                password: password.as_deref(),
-                items: Some(HashSet::from([item.clone()])),
-                base,
-                conflict: Conflict::Overwrite,
-            };
-            archive::extract(&path, &opts, progress)?;
-            let name = item.rsplit('/').next().unwrap_or(item);
-            let file = archive::safe_join(&dest, name).ok_or_else(|| Error::Other("unsafe_name".into()))?;
-            if !file.exists() {
-                return Err(Error::Other("not_found".into()));
-            }
+        JobSpec::Open { archive: path, password, item, expected_files } => {
+            let file = open_cached(Path::new(path), password.as_deref(), item, *expected_files, progress)?;
             app.opener().open_path(file.to_string_lossy(), None::<&str>).map_err(|e| Error::Other(e.to_string()))?;
             Ok(file)
         }
     }
+}
+
+/// A file opened from an archive is extracted once: opening it again (a solid archive can take
+/// minutes to reach it) reuses the copy while the archive itself is unchanged.
+fn open_cached(
+    path: &Path,
+    password: Option<&str>,
+    item: &str,
+    expected_files: Option<usize>,
+    progress: &Progress,
+) -> archive::Result<PathBuf> {
+    use std::hash::{Hash, Hasher};
+    let name = item.rsplit('/').next().unwrap_or(item);
+    // A folder per entry: "a/readme.txt" and "b/readme.txt" don't share the cache
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    item.hash(&mut hasher);
+    let dir = temp_folder(path).join(format!("{:016x}", hasher.finish()));
+    let file = archive::safe_join(&dir, name).ok_or_else(|| Error::Other("unsafe_name".into()))?;
+    if file.is_file() {
+        return Ok(file);
+    }
+    // Extracted aside and moved into place when complete: the cache never holds a partial file
+    let part = archive::unique_path(&dir.join(".part"));
+    let opts = ExtractOptions {
+        dest: &part,
+        password,
+        items: Some(HashSet::from([item.to_string()])),
+        base: item.rsplit_once('/').map(|(dir, _)| dir.to_string()).unwrap_or_default(),
+        conflict: Conflict::Overwrite,
+        expected_files: expected_files.or(Some(1)),
+    };
+    let result = archive::extract(path, &opts, progress).and_then(|_| {
+        let extracted =
+            archive::safe_join(&part, name).filter(|p| p.is_file()).ok_or_else(|| Error::Other("not_found".into()))?;
+        fs::rename(extracted, &file)?;
+        Ok(())
+    });
+    let _ = fs::remove_dir_all(&part);
+    result.map(|_| file)
 }
 
 /// Like 7-Zip's "Extract to <name>\", but "name.zip" holding just a "name" folder doesn't become
@@ -181,11 +232,13 @@ fn extract_to_folder(
     password: Option<&str>,
     items: Option<HashSet<String>>,
     base: &str,
+    expected_files: Option<usize>,
     progress: &Progress,
 ) -> archive::Result<PathBuf> {
     let stem = archive::archive_stem(path);
     let temp = archive::unique_path(&parent.join(format!(".{stem}.arc-tmp")));
-    let opts = ExtractOptions { dest: &temp, password, items, base: base.to_string(), conflict: Conflict::Rename };
+    let opts =
+        ExtractOptions { dest: &temp, password, items, base: base.to_string(), conflict: Conflict::Rename, expected_files };
     if let Err(e) = archive::extract(path, &opts, progress) {
         let _ = fs::remove_dir_all(&temp);
         return Err(e);
@@ -207,6 +260,7 @@ fn extract_to_folder(
 /// Drag & drop out of the archive: the selected entries of the current folder are extracted into
 /// a fresh temporary folder, and these files are what Explorer copies when they are dropped.
 /// Returns the top-level paths to drag (one per selected entry).
+#[cfg_attr(windows, allow(dead_code))]
 pub fn extract_for_drag(path: &Path, password: Option<&str>, items: &[String], base: &str) -> archive::Result<Vec<PathBuf>> {
     static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
     let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -218,6 +272,7 @@ pub fn extract_for_drag(path: &Path, password: Option<&str>, items: &[String], b
         items: Some(items.iter().cloned().collect()),
         base: base.to_string(),
         conflict: Conflict::Overwrite,
+        expected_files: None,
     };
     archive::extract(path, &opts, &Progress::default())?;
     let paths: Vec<PathBuf> = items
@@ -234,11 +289,16 @@ pub fn extract_for_drag(path: &Path, password: Option<&str>, items: &[String], b
     Ok(paths)
 }
 
-/// A folder per archive, so files with the same name from different archives don't collide.
+/// A folder per archive version, so files with the same name from different archives don't collide
+/// and a changed archive isn't served from an old copy.
 fn temp_folder(archive: &Path) -> PathBuf {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     archive.hash(&mut hasher);
+    if let Ok(meta) = fs::metadata(archive) {
+        meta.len().hash(&mut hasher);
+        meta.modified().ok().hash(&mut hasher);
+    }
     crate::config::temp_dir().join(format!("{:016x}", hasher.finish()))
 }
 

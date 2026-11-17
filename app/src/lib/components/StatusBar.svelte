@@ -21,8 +21,10 @@
     <span>{formatSize(archive.tree.size)}</span>
     {#if ratio != null && archive.listing.size}<span title={t("ratio")}>{formatSize(archive.listing.size)} · {ratio}%</span>{/if}
     {#if archive.listing.solid && archive.listing.format !== "tar.gz" && archive.listing.format !== "tar.xz"}<span>{t("solid")}</span>{/if}
-    {#if app.preparingDrag}
-      <span class="opening"><LoaderCircle size={12} class="spin" />{t("preparing_drag")}</span>
+    {#if app.dragJob?.sample}
+      <span class="opening" title={t("esc_cancels")}>
+        <LoaderCircle size={12} class="spin" />{t("preparing_drag")}{#if app.dragJob.total}&nbsp;{Math.floor((app.dragJob.done / app.dragJob.total) * 100)}%{/if}
+      </span>
     {/if}
     {#if app.opening}
       <span class="opening"><LoaderCircle size={12} class="spin" />{t("opening", app.opening)}</span>

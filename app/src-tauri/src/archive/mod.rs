@@ -338,24 +338,34 @@ pub struct ExtractOptions<'a> {
     /// Folder inside the archive the items are taken from: it is not recreated
     pub base: String,
     pub conflict: Conflict,
+    /// How many file entries `items` covers, when the caller knows it (from the listing):
+    /// streams (tar) stop reading once that many are out instead of decoding to the end
+    pub expected_files: Option<usize>,
 }
 
 impl ExtractOptions<'_> {
     /// Path relative to dest, or None when the entry is not wanted
     pub fn target(&self, entry: &str) -> Option<String> {
         let entry = normalize(entry);
-        if let Some(items) = &self.items {
-            let wanted = items.contains(&entry)
-                || items.iter().any(|i| entry.len() > i.len() && entry.starts_with(i.as_str()) && entry.as_bytes()[i.len()] == b'/');
-            if !wanted {
-                return None;
-            }
+        if let Some(items) = &self.items
+            && !Self::covered(items, &entry)
+        {
+            return None;
         }
         if self.base.is_empty() {
             return Some(entry);
         }
         let rest = entry.strip_prefix(self.base.as_str())?.strip_prefix('/')?;
         (!rest.is_empty()).then(|| rest.to_string())
+    }
+
+    /// The entry or one of its parent folders is selected: a lookup per path level,
+    /// not a scan of the selection (thousands of selected items × a big archive)
+    fn covered(items: &HashSet<String>, entry: &str) -> bool {
+        if items.contains(entry) {
+            return true;
+        }
+        entry.match_indices('/').any(|(i, _)| items.contains(&entry[..i]))
     }
 
     /// Where an entry goes on disk; None for unsafe names or a skipped conflict
@@ -436,6 +446,31 @@ pub fn create_file(opts: &ExtractOptions, relative: &str) -> io::Result<Option<(
     }
     let file = File::create(&path)?;
     Ok(Some((path, file)))
+}
+
+/// Writes one extracted file: `fill` copies the data in. The time is set on the open handle
+/// (no second open per file), and a failed file is removed. Ok(None): skipped or unsafe name.
+pub fn write_file(
+    opts: &ExtractOptions,
+    relative: &str,
+    modified: Option<i64>,
+    fill: impl FnOnce(&mut dyn Write) -> io::Result<()>,
+) -> io::Result<Option<PathBuf>> {
+    let Some((target, file)) = create_file(opts, relative)? else { return Ok(None) };
+    let mut out = io::BufWriter::with_capacity(1 << 20, file);
+    let result = fill(&mut out).and_then(|_| out.flush());
+    match result.and_then(|_| out.into_inner().map_err(|e| e.into_error())) {
+        Ok(file) => {
+            if let Some(secs) = modified {
+                let _ = filetime::set_file_handle_times(&file, None, Some(filetime::FileTime::from_unix_time(secs, 0)));
+            }
+            Ok(Some(target))
+        }
+        Err(e) => {
+            let _ = fs::remove_file(&target);
+            Err(e)
+        }
+    }
 }
 
 pub fn set_modified(path: &Path, unix: Option<i64>) {

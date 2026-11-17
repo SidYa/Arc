@@ -1,6 +1,10 @@
 mod archive;
 mod config;
+#[cfg(windows)]
+mod dragout;
 mod jobs;
+#[cfg(windows)]
+mod menubatch;
 mod shell;
 
 use std::collections::HashMap;
@@ -207,13 +211,46 @@ fn cancel_job(state: State<AppState>, id: u32) {
 /// Drags entries of the open archive out to Explorer (or any drop target): only they are
 /// extracted, into a temporary folder, then the system drag starts with those files.
 /// Ends when they are dropped or the drag is cancelled: "dropped" | "cancelled".
+#[cfg(windows)]
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn drag_out(
+    app: AppHandle,
     window: tauri::WebviewWindow,
+    id: u32,
     archive: String,
     password: Option<String>,
     items: Vec<String>,
+    dirs: Vec<bool>,
     base: String,
+    expected_files: Option<usize>,
+) -> Result<String, String> {
+    // Starts at once with placeholders; the entries are extracted on the drop (see dragout.rs)
+    let req = dragout::DragRequest { archive: PathBuf::from(archive), password, items, dirs, base, expected_files };
+    let (tx, rx) = std::sync::mpsc::channel();
+    let target = window.clone();
+    window
+        .run_on_main_thread(move || {
+            let _ = tx.send(dragout::run(&app, &target, id, req));
+        })
+        .map_err(|e| e.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || rx.recv().unwrap_or_else(|_| Ok("cancelled".into())))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[cfg(not(windows))]
+#[tauri::command]
+#[allow(clippy::too_many_arguments, unused_variables)]
+async fn drag_out(
+    window: tauri::WebviewWindow,
+    id: u32,
+    archive: String,
+    password: Option<String>,
+    items: Vec<String>,
+    dirs: Vec<bool>,
+    base: String,
+    expected_files: Option<usize>,
 ) -> Result<String, String> {
     let paths = tauri::async_runtime::spawn_blocking(move || {
         jobs::extract_for_drag(Path::new(&archive), password.as_deref(), &items, &base).map_err(|e| e.to_string())
@@ -523,23 +560,46 @@ fn create_window(app: &AppHandle, config: &Config) -> tauri::Result<()> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let args: Vec<String> = std::env::args().collect();
+    let request = parse_args(&args, &cwd);
+
+    // Explorer menu on Windows: the processes Explorer starts (one per file) are merged before
+    // anything else, and the batch runs in its own process, apart from an open main window
+    #[cfg(windows)]
+    let (request, menu) = match request {
+        Some(req) if req.action != "open" => match menubatch::gather(&req.action, req.paths) {
+            Some(paths) => (Some(OpenRequest { action: req.action, paths }), true),
+            None => return,
+        },
+        other => (other, false),
+    };
+    #[cfg(not(windows))]
+    let menu = false;
+
+    let mut builder = tauri::Builder::default();
+    if !menu {
         // Must be first: a second launch hands its arguments to the running instance and exits
-        .plugin(tauri_plugin_single_instance::init(|app, argv, cwd| match parse_args(&argv, Path::new(&cwd)) {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, argv, cwd| match parse_args(&argv, Path::new(&cwd)) {
             Some(req) => queue_request(app, req),
             None => show_window(app),
-        }))
+        }));
+    }
+    builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState::default())
-        .setup(|app| {
+        .setup(move |app| {
             let handle = app.handle().clone();
             let state = app.state::<AppState>();
             let config = Config::load();
             *state.config.lock().unwrap() = config.clone();
 
-            // Files opened from archives in an earlier session
-            let _ = std::fs::remove_dir_all(config::temp_dir());
+            // Files opened from archives in an earlier session (a menu process may run
+            // next to a main window that still uses them)
+            if !menu {
+                let _ = std::fs::remove_dir_all(config::temp_dir());
+            }
 
             // The exe path changes with updates and reinstalls: keep the registry current
             if let Err(e) = shell::register_app(&config.language) {
@@ -552,9 +612,11 @@ pub fn run() {
             }
 
             // Started from the Explorer menu: no main window, only the task's progress window
-            let cwd = std::env::current_dir().unwrap_or_default();
-            let args: Vec<String> = std::env::args().collect();
-            match parse_args(&args, &cwd) {
+            match request.clone() {
+                // Already merged: straight to the progress window
+                Some(req) if menu => {
+                    create_task_window(&handle, Task { action: req.action, paths: req.paths, specs: None })?;
+                }
                 Some(req) => {
                     if req.action == "open" {
                         create_window(&handle, &config)?;

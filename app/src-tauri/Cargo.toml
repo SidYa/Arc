@@ -32,10 +32,26 @@ walkdir = "2.5.0"
 filetime = "0.2.29"
 chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
 sys-locale = "0.3.2"
+
+[target.'cfg(not(windows))'.dependencies]
 drag = "2.1.1"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.55"
+# Already in the tree through WebView2; COM for dragging out to Explorer
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Com",
+    "Win32_System_Ole",
+    "Win32_System_SystemServices",
+    "Win32_System_Threading",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
+    "Win32_UI_Shell_Common",
+    "Win32_UI_WindowsAndMessaging",
+] }
+windows-core = "0.62"
 windows-sys = { version = "0.61", features = ["Win32_UI_Shell"] }
 
 [profile.release]
@@ -44,3 +60,7 @@ lto = true
 opt-level = 3
 panic = "abort"
 strip = true
+
+# Dependencies optimized in dev builds too: compression in debug mode is otherwise ~20x slower
+[profile.dev.package."*"]
+opt-level = 3

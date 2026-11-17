@@ -36,7 +36,7 @@ fn sample(root: &Path) -> PathBuf {
 }
 
 fn options<'a>(dest: &'a Path, password: Option<&'static str>) -> ExtractOptions<'a> {
-    ExtractOptions { dest, password, items: None, base: String::new(), conflict: Conflict::Rename }
+    ExtractOptions { dest, password, items: None, base: String::new(), conflict: Conflict::Rename, expected_files: None }
 }
 
 fn assert_same(src: &Path, out: &Path) {

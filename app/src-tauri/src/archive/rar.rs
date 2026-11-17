@@ -72,7 +72,13 @@ pub fn extract(path: &Path, opts: &ExtractOptions, progress: &Progress) -> Resul
     let has_password = opts.password.is_some();
     // The total comes from a listing pass (headers only, fast)
     let listing = list(path, opts.password)?;
-    progress.set_total(listing.entries.iter().filter(|e| !e.is_dir && opts.target(&e.path).is_some()).map(|e| e.size).sum());
+    let wanted: Vec<&Entry> = listing.entries.iter().filter(|e| !e.is_dir && opts.target(&e.path).is_some()).collect();
+    progress.set_total(wanted.iter().map(|e| e.size).sum());
+    // A solid archive is unpacked from the start anyway, but never past the last wanted file
+    let mut left = wanted.len();
+    if left == 0 && opts.items.is_some() && listing.entries.iter().all(|e| !e.is_dir || opts.target(&e.path).is_none()) {
+        return Ok(());
+    }
 
     let mut cursor = with_archive(path, opts.password.as_deref(), |a| {
         a.open_for_processing().map_err(|e| map_error(e, has_password))
@@ -111,6 +117,10 @@ pub fn extract(path: &Path, opts: &ExtractOptions, progress: &Progress) -> Resul
                             Ok(next) => {
                                 progress.add(size);
                                 super::set_modified(&target, modified);
+                                left = left.saturating_sub(1);
+                                if left == 0 && opts.items.is_some() {
+                                    break;
+                                }
                                 Ok(next)
                             }
                             Err(e) => {
@@ -119,7 +129,10 @@ pub fn extract(path: &Path, opts: &ExtractOptions, progress: &Progress) -> Resul
                             }
                         }
                     }
-                    None => header.skip(),
+                    None => {
+                        left = left.saturating_sub(1);
+                        header.skip()
+                    }
                 }
             }
             _ => header.skip(),

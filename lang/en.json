@@ -78,6 +78,7 @@
   "preparing": "Preparing…",
   "eta": "{} left",
   "opening": "Opening {}…",
+  "esc_cancels": "Esc cancels",
   "preparing_drag": "Preparing the files…",
   "drag_again": "Password saved: drag the files again",
   "exists_replace": "An archive with this name exists and will be replaced",

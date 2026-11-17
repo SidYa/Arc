@@ -170,19 +170,14 @@ pub fn extract(path: &Path, opts: &ExtractOptions, progress: &Progress) -> Resul
             _ => archive.by_index(index),
         }
         .map_err(map_error)?;
-        let Some((target, file)) = super::create_file(opts, &relative)? else { continue };
-        let mut out = std::io::BufWriter::with_capacity(1 << 20, file);
-        let result = super::copy(&mut entry, &mut out, progress).and_then(|_| out.flush());
-        drop(out);
+        let result = super::write_file(opts, &relative, modified, |out| super::copy(&mut entry, out, progress).map(drop));
         if let Err(e) = result {
-            let _ = fs::remove_file(&target);
             // A ZipCrypto password is checked by one byte only: a wrong one shows up as bad data
             if opts.password.is_some() && e.kind() == std::io::ErrorKind::InvalidData {
                 return Err(Error::WrongPassword);
             }
             return Err(e.into());
         }
-        super::set_modified(&target, modified);
     }
     Ok(())
 }

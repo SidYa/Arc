@@ -46,7 +46,7 @@ mod windows {
         [("03extract", "--extract-here", "menu_extract_here"), ("04folder", "--extract-folder", "menu_extract_folder")];
 
     /// A cascading "Arc" verb with the given items. Explorer starts one process per selected
-    /// file; the running instance collects them into one batch (lib.rs).
+    /// file; they are merged into one batch before Tauri starts (menubatch.rs).
     fn add_menu(classes: &RegKey, key: &str, items: &[(&str, &str, &str)], exe: &str, strings: &Strings) -> Res {
         let _ = classes.delete_subkey_all(key);
         let (menu, _) = classes.create_subkey(key)?;

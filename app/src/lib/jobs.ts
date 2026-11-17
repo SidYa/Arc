@@ -21,7 +21,7 @@ export interface Job {
 }
 
 /** Windows number their jobs independently: random ids don't collide */
-const newId = () => crypto.getRandomValues(new Uint32Array(1))[0];
+export const newId = () => crypto.getRandomValues(new Uint32Array(1))[0];
 
 const running = new Map<number, { job: Job; resolve: (job: Job) => void }>();
 
@@ -31,6 +31,13 @@ export function startJob(spec: JobSpec, track: (job: Job) => Job = (j) => j): { 
   const finished = new Promise<Job>((resolve) => running.set(job.id, { job, resolve }));
   api.startJob(job.id, spec).catch((e) => onJobFinished({ id: job.id, ok: false, error: String(e), output: null }));
   return { job, finished };
+}
+
+/** Follows the progress of work the backend runs under this id outside `startJob` (dragging out) */
+export function watchJob(id: number, track: (job: Job) => Job): { job: Job; stop: () => void } {
+  const job = track({ id, spec: null as unknown as JobSpec, state: "running", done: 0, total: 0, current: "", speed: 0, error: null, output: null, sample: null });
+  running.set(id, { job, resolve: () => {} });
+  return { job, stop: () => running.delete(id) };
 }
 
 export function onJobProgress(list: JobProgress[]) {

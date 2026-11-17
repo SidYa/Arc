@@ -1,5 +1,6 @@
 import { SvelteSet } from "svelte/reactivity";
 import type { Config, Listing } from "./api";
+import type { Job } from "./jobs";
 import type { SortKey, Tree } from "./tree";
 
 export const app = $state({
@@ -15,8 +16,8 @@ export const app = $state({
   opening: null as string | null,
   /** Entries are being dragged out of the archive: drops on Arc itself are ours, not new files */
   draggingOut: false,
-  /** The dragged entries are still being extracted */
-  preparingDrag: false,
+  /** The dropped entries are being extracted (progress of the drag) */
+  dragJob: null as Job | null,
 });
 
 // ---------------------------------------------------------------- open archive

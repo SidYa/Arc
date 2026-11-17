@@ -90,8 +90,10 @@ export type JobSpec =
       password: string | null;
       items?: string[] | null;
       base?: string;
+      /** File entries the items cover: streamed formats stop early */
+      expected_files?: number | null;
     }
-  | { kind: "open"; archive: string; password: string | null; item: string };
+  | { kind: "open"; archive: string; password: string | null; item: string; expected_files?: number | null };
 
 export interface JobProgress {
   id: number;
@@ -117,8 +119,8 @@ export const api = {
   startJob: (id: number, spec: JobSpec) => invoke<void>("start_job", { id, spec }),
   cancelJob: (id: number) => invoke<void>("cancel_job", { id }),
   pauseJob: (id: number, paused: boolean) => invoke<void>("pause_job", { id, paused }),
-  dragOut: (archive: string, password: string | null, items: string[], base: string) =>
-    invoke<"dropped" | "cancelled">("drag_out", { archive, password, items, base }),
+  dragOut: (id: number, archive: string, password: string | null, items: string[], dirs: boolean[], base: string, expectedFiles: number | null) =>
+    invoke<"dropped" | "cancelled">("drag_out", { id, archive, password, items, dirs, base, expectedFiles }),
   isBusy: () => invoke<boolean>("is_busy"),
   takeTask: (id: number) => invoke<Task | null>("take_task", { id }),
   openTask: (task: Task) => invoke<void>("open_task", { task }),

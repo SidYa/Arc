@@ -109,3 +109,24 @@ export function sortNodes(nodes: Node[], key: SortKey, desc: boolean): Node[] {
     return r * sign;
   });
 }
+
+/** File entries of the listing the selected items cover (themselves or inside selected folders):
+ *  streamed formats stop reading once that many are extracted. Duplicates count, as they're extracted too. */
+export function countFiles(entries: Entry[], items: string[]): number {
+  const wanted = new Set(items);
+  let count = 0;
+  for (const e of entries) {
+    if (e.is_dir) continue;
+    if (wanted.has(e.path)) {
+      count++;
+      continue;
+    }
+    for (let i = e.path.indexOf("/"); i >= 0; i = e.path.indexOf("/", i + 1)) {
+      if (wanted.has(e.path.slice(0, i))) {
+        count++;
+        break;
+      }
+    }
+  }
+  return count;
+}

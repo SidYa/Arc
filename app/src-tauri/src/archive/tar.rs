@@ -2,7 +2,7 @@
 //! progress follows the compressed bytes read, since the unpacked size is unknown up front.
 
 use std::fs::{self, File};
-use std::io::{self, BufReader, BufWriter, Read, Write};
+use std::io::{self, BufReader, Read, Write};
 use std::path::Path;
 
 use flate2::Compression;
@@ -59,6 +59,29 @@ fn effective_format(path: &Path, format: Format) -> Format {
     }
 }
 
+/// A gzip file ends with the unpacked size mod 4 GB (ISIZE), like `gzip -l` and 7-Zip read it:
+/// no need to decompress the whole file just to show its size.
+fn gzip_size(path: &Path, format: Format) -> Option<u64> {
+    use std::io::{Seek, SeekFrom};
+    if format != Format::Gz {
+        return None;
+    }
+    let mut file = File::open(path).ok()?;
+    let packed = file.metadata().ok()?.len();
+    if packed < 18 {
+        return None;
+    }
+    file.seek(SeekFrom::End(-4)).ok()?;
+    let mut tail = [0u8; 4];
+    file.read_exact(&mut tail).ok()?;
+    let mut size = u32::from_le_bytes(tail) as u64;
+    // Larger than 4 GB: the field wrapped; deflate packs at most ~1032:1, so add the lost multiples
+    while size < packed.saturating_sub(18) / 1032 {
+        size += 1 << 32;
+    }
+    Some(size)
+}
+
 fn map_io(e: io::Error, progress: &Progress) -> Error {
     if progress.is_cancelled() { Error::Cancelled } else { e.into() }
 }
@@ -66,9 +89,14 @@ fn map_io(e: io::Error, progress: &Progress) -> Error {
 pub fn list(path: &Path, format: Format, progress: &Progress) -> Result<Listing> {
     let format = effective_format(path, format);
     if matches!(format, Format::Gz | Format::Xz) {
-        // The size is only known after decompressing
-        let mut stream = open(path, format, progress)?;
-        let size = super::copy(&mut stream, &mut io::sink(), progress).map_err(|e| map_io(e, progress))?;
+        let size = match gzip_size(path, format) {
+            Some(size) => size,
+            None => {
+                // xz: the size is only known after decompressing
+                let mut stream = open(path, format, progress)?;
+                super::copy(&mut stream, &mut io::sink(), progress).map_err(|e| map_io(e, progress))?
+            }
+        };
         let modified = fs::metadata(path).ok().and_then(|m| m.modified().ok()).and_then(|t| {
             t.duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_secs() as i64)
         });
@@ -108,20 +136,18 @@ pub fn extract(path: &Path, format: Format, opts: &ExtractOptions, progress: &Pr
         let Some(relative) = opts.target(&name) else { return Ok(()) };
         let mut stream = open(path, format, progress)?;
         progress.set_current(&relative);
-        let Some((target, file)) = super::create_file(opts, &relative)? else { return Ok(()) };
-        let mut out = BufWriter::with_capacity(1 << 20, file);
-        // Progress counts the compressed input here: write to a plain sink of counts
-        let result = copy_uncounted(&mut stream, &mut out, progress).and_then(|_| out.flush());
-        drop(out);
-        if let Err(e) = result {
-            let _ = fs::remove_file(&target);
-            return Err(map_io(e, progress));
-        }
+        let modified = fs::metadata(path).ok().and_then(|m| m.modified().ok()).and_then(|t| {
+            t.duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_secs() as i64)
+        });
+        // Progress counts the compressed input here
+        super::write_file(opts, &relative, modified, |out| copy_uncounted(&mut stream, out, progress).map(drop))
+            .map_err(|e| map_io(e, progress))?;
         return Ok(());
     }
 
     let mut archive = Archive::new(open(path, format, progress)?);
     let mut dir_times = Vec::new();
+    let mut files = 0usize;
     for entry in archive.entries().map_err(|e| map_io(e, progress))? {
         let mut entry = entry.map_err(|e| map_io(e, progress))?;
         let kind = entry.header().entry_type();
@@ -135,15 +161,13 @@ pub fn extract(path: &Path, format: Format, opts: &ExtractOptions, progress: &Pr
                 dir_times.push((dir, modified));
             }
         } else if kind.is_file() || kind == EntryType::Continuous {
-            let Some((target, file)) = super::create_file(opts, &relative)? else { continue };
-            let mut out = BufWriter::with_capacity(1 << 20, file);
-            let result = copy_uncounted(&mut entry, &mut out, progress).and_then(|_| out.flush());
-            drop(out);
-            if let Err(e) = result {
-                let _ = fs::remove_file(&target);
-                return Err(map_io(e, progress));
+            super::write_file(opts, &relative, modified, |out| copy_uncounted(&mut entry, out, progress).map(drop))
+                .map_err(|e| map_io(e, progress))?;
+            files += 1;
+            // Everything wanted is out: the rest of the stream isn't decompressed
+            if opts.expected_files.is_some_and(|n| files >= n) {
+                break;
             }
-            super::set_modified(&target, modified);
         }
         // Links and devices are skipped: they need privileges on Windows and are a security risk
     }

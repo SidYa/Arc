@@ -5,9 +5,9 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api, type JobSpec, type OpenRequest } from "./api";
 import { baseName, dirName } from "./format";
 import { t } from "./i18n.svelte";
-import { errorText, isPasswordError, startJob } from "./jobs";
+import { errorText, isPasswordError, newId, startJob, watchJob } from "./jobs";
 import { app, notify, openDialog, selection, setCwd, view } from "./store.svelte";
-import { buildTree, type Node } from "./tree";
+import { buildTree, countFiles, type Node } from "./tree";
 
 const ARCHIVE_EXTENSIONS = ["zip", "7z", "rar", "tar", "gz", "tgz", "xz", "txz"];
 
@@ -69,7 +69,8 @@ export async function openNode(node: Node) {
   app.opening = node.name;
   try {
     for (;;) {
-      const spec: JobSpec = { kind: "open", archive: archive.path, password, item: node.path };
+      const expected_files = countFiles(archive.listing.entries, [node.path]);
+      const spec: JobSpec = { kind: "open", archive: archive.path, password, item: node.path, expected_files };
       const job = await startJob(spec).finished;
       if (job.state === "done") {
         // Remember a password that worked
@@ -91,32 +92,41 @@ export async function openNode(node: Node) {
   }
 }
 
-/** Drag the selected entries to Explorer: only they are extracted (to a temporary folder),
- *  then the system drag starts with them. Called while the mouse button is still held. */
+/** Drag the selected entries to Explorer. The drag starts at once with placeholders; only on the
+ *  drop are the entries extracted (into a temporary folder), with the progress in the status bar.
+ *  Called while the mouse button is still held. */
 export async function dragOut() {
   const archive = view.archive;
   if (!archive || app.draggingOut || !selection.size) return;
+  const nodes = (archive.tree.children.get(view.cwd) ?? []).filter((n) => selection.has(n.path));
+  if (!nodes.length) return;
+  // Encrypted entries need the password before the drag: the button is released by then
+  if (!archive.password && nodes.some((n) => n.encrypted)) {
+    await askDragPassword(archive.path, archive.name, false);
+    return;
+  }
+  const items = nodes.map((n) => n.path);
+  const id = newId();
+  const watch = watchJob(id, (job) => (app.dragJob = job));
   app.draggingOut = true;
-  // Small files are ready at once: the indicator only shows for slow ones
-  const slow = setTimeout(() => (app.preparingDrag = true), 250);
   try {
-    await api.dragOut(archive.path, archive.password, [...selection], view.cwd);
+    await api.dragOut(id, archive.path, archive.password, items, nodes.map((n) => n.isDir), view.cwd, countFiles(archive.listing.entries, items));
   } catch (e) {
     const code = String(e);
-    if (isPasswordError(code)) {
-      // The mouse button is released by now: the drag starts over once the password is known
-      clearTimeout(slow);
-      app.preparingDrag = false;
-      const password = await openDialog("password", { archive: archive.name, wrong: code === "wrong_password" });
-      if (password != null && view.archive?.path === archive.path) {
-        view.archive.password = password;
-        notify(t("drag_again"));
-      }
-    } else notify(errorText(e), "error");
+    if (isPasswordError(code)) await askDragPassword(archive.path, archive.name, code === "wrong_password");
+    else if (code !== "cancelled") notify(errorText(e), "error");
   } finally {
-    clearTimeout(slow);
-    app.preparingDrag = false;
+    watch.stop();
+    app.dragJob = null;
     app.draggingOut = false;
+  }
+}
+
+async function askDragPassword(path: string, name: string, wrong: boolean) {
+  const password = await openDialog("password", { archive: name, wrong });
+  if (password != null && view.archive?.path === path) {
+    view.archive.password = password;
+    notify(t("drag_again"));
   }
 }
 
@@ -163,6 +173,7 @@ export async function extractCurrent(target: ExtractTarget, onlySelected = false
     password: archive.password,
     items,
     base: items ? view.cwd : "",
+    expected_files: items ? countFiles(archive.listing.entries, items) : null,
   };
   await api.openTask({ action: "jobs", specs: [spec] });
 }

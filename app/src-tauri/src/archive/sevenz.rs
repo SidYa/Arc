@@ -78,20 +78,35 @@ pub fn extract(path: &Path, opts: &ExtractOptions, progress: &Progress) -> Resul
             blocks.insert(block);
         }
     }
+    // Unwanted files of a solid block are decoded too, but only up to the last wanted one
+    let mut last_wanted = std::collections::HashMap::new();
+    for (index, _) in archive.files.iter().enumerate() {
+        if wanted[index].is_some()
+            && let Some(block) = archive.stream_map.file_block_index[index]
+        {
+            last_wanted.insert(block, index);
+        }
+    }
     for (index, file) in archive.files.iter().enumerate() {
-        if archive.stream_map.file_block_index[index].is_some_and(|b| blocks.contains(&b)) {
-            // Unwanted files of a solid block are decoded too
+        if let Some(block) = archive.stream_map.file_block_index[index]
+            && last_wanted.get(&block).is_some_and(|&last| index <= last)
+        {
             total += file.size();
         }
     }
     progress.set_total(total);
 
-    let source = reader_source(path)?;
-    let mut source = source;
+    let mut source = reader_source(path)?;
     let mut sorted: Vec<_> = blocks.into_iter().collect();
     sorted.sort_unstable();
     for block in sorted {
         let first = archive.stream_map.block_first_file_index[block];
+        // Decoding stops after the last wanted file of the block: the rest of a solid block is never unpacked
+        let last = (first..archive.files.len())
+            .take_while(|&i| archive.stream_map.file_block_index[i] == Some(block))
+            .filter(|&i| wanted[i].is_some())
+            .last()
+            .unwrap_or(first);
         let mut decoder = BlockDecoder::new(threads, block, &archive, &pw, &mut source);
         decoder.set_thread_count(threads);
         let mut offset = first;
@@ -103,29 +118,17 @@ pub fn extract(path: &Path, opts: &ExtractOptions, progress: &Progress) -> Resul
                 match wanted.get(index).cloned().flatten() {
                     Some(relative) if !entry.is_directory() => {
                         progress.set_current(&relative);
-                        match super::create_file(opts, &relative)? {
-                            Some((target, file)) => {
-                                let mut out = io::BufWriter::with_capacity(1 << 20, file);
-                                let copied = super::copy(data, &mut out, progress).and_then(|_| out.flush());
-                                drop(out);
-                                if let Err(e) = copied {
-                                    let _ = fs::remove_file(&target);
-                                    return Err(e.into());
-                                }
-                                if entry.has_last_modified_date {
-                                    super::set_modified(&target, unix_time(entry.last_modified_date()));
-                                }
-                            }
-                            None => {
-                                super::copy(data, &mut io::sink(), progress)?;
-                            }
+                        let modified = if entry.has_last_modified_date { unix_time(entry.last_modified_date()) } else { None };
+                        let written = super::write_file(opts, &relative, modified, |out| super::copy(data, out, progress).map(drop))?;
+                        if written.is_none() {
+                            super::copy(data, &mut io::sink(), progress)?;
                         }
                     }
                     _ => {
                         super::copy(data, &mut io::sink(), progress)?;
                     }
                 }
-                Ok(true)
+                Ok(index < last)
             })
             .map_err(|e| if progress.is_cancelled() { Error::Cancelled } else { map_error(e, has_password) })?;
     }
