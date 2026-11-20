@@ -29,11 +29,13 @@ const CLSID: GUID = GUID::from_u128(0x37B70A45_F2C2_4F46_8A59_3EE158D32A3D);
 const MENU_KEY: &str = r"Software\Arc\Menu";
 
 /// Submenu items: registry value with the title, command line flag, only for archives, English title.
-const ITEMS: [(&str, &str, bool, &str); 4] = [
+/// "{}" in a title is the folder the archive goes into (`folder_name`).
+const ITEMS: [(&str, &str, bool, &str); 5] = [
     ("Add", "--add", false, "Add to archive"),
     ("AddPassword", "--add-password", false, "Add to archive with password"),
-    ("ExtractHere", "--extract-here", true, "Extract here"),
-    ("ExtractFolder", "--extract-folder", true, "Extract to folder"),
+    ("ExtractHere", "--extract-here", true, "Extract"),
+    ("ExtractFolder", "--extract-folder", true, r#"Extract to "{}\""#),
+    ("ExtractChoose", "--extract-choose", true, "Extract to…"),
 ];
 
 /// Until Arc writes its own list (it runs after the installer)
@@ -104,6 +106,30 @@ fn is_archive(path: &str, extensions: &[String]) -> bool {
     extensions.iter().any(|ext| name.len() > ext.len() + 1 && name.ends_with(&format!(".{ext}")))
 }
 
+/// Like 7-Zip: the folder of a single archive ("photos.tar.gz" -> "photos"), "*" for several.
+/// The same name as archive_stem in src-tauri/src/archive/mod.rs.
+fn folder_name(paths: &[String]) -> String {
+    let [path] = paths else { return "*".into() };
+    let name = path.rsplit(['\\', '/']).next().unwrap_or(path);
+    let lower = name.to_lowercase();
+    let mut cut = name.len();
+    for ext in [".tar.gz", ".tar.xz", ".tgz", ".txz", ".tar", ".zip", ".7z", ".rar", ".gz", ".xz"] {
+        if lower.ends_with(ext) {
+            cut = name.len() - ext.len();
+            break;
+        }
+    }
+    let mut stem = name[..cut].to_string();
+    // Multi-volume RAR: name.part01.rar
+    if let Some(pos) = stem.to_lowercase().rfind(".part")
+        && stem.len() > pos + 5
+        && stem[pos + 5..].chars().all(|c| c.is_ascii_digit())
+    {
+        stem.truncate(pos);
+    }
+    if stem.is_empty() { "archive".into() } else { stem }
+}
+
 fn archive_extensions() -> Vec<String> {
     read_string("Extensions").unwrap_or_else(|| DEFAULT_EXTENSIONS.into()).split(';').filter(|s| !s.is_empty()).map(str::to_lowercase).collect()
 }
@@ -138,10 +164,17 @@ impl IObjectWithSite_Impl for Command_Impl {
 }
 
 impl IExplorerCommand_Impl for Command_Impl {
-    fn GetTitle(&self, _items: Ref<IShellItemArray>) -> Result<PWSTR> {
+    fn GetTitle(&self, items: Ref<IShellItemArray>) -> Result<PWSTR> {
         match self.item {
             None => to_pwstr("Arc"),
-            Some(i) => to_pwstr(&read_string(ITEMS[i].0).unwrap_or_else(|| ITEMS[i].3.to_string())),
+            Some(i) => {
+                let title = read_string(ITEMS[i].0).unwrap_or_else(|| ITEMS[i].3.to_string());
+                if title.contains("{}") {
+                    to_pwstr(&title.replace("{}", &folder_name(&paths(items))))
+                } else {
+                    to_pwstr(&title)
+                }
+            }
         }
     }
 
@@ -322,11 +355,11 @@ mod tests {
             CoTaskMemFree(Some(title.0 as *const c_void));
 
             let list = root.EnumSubCommands().unwrap();
-            let mut got = [None, None, None, None, None];
+            let mut got = [None, None, None, None, None, None];
             let mut fetched = 0;
             assert_eq!(list.Next(&mut got, Some(&mut fetched)), S_FALSE);
-            assert_eq!(fetched, 4);
-            assert!(got[3].is_some() && got[4].is_none());
+            assert_eq!(fetched, 5);
+            assert!(got[4].is_some() && got[5].is_none());
 
             let mut wrong: *mut c_void = std::ptr::null_mut();
             assert_eq!(DllGetClassObject(&GUID::zeroed(), &IClassFactory::IID, &mut wrong), CLASS_E_CLASSNOTAVAILABLE);
@@ -340,5 +373,14 @@ mod tests {
         assert!(super::is_archive(r"C:\a\b.tar.gz", &ext));
         assert!(!super::is_archive(r"C:\a\b.zip.txt", &ext));
         assert!(!super::is_archive(r"C:\a\.zip", &ext));
+    }
+
+    #[test]
+    fn folder_names() {
+        let one = |p: &str| super::folder_name(&[p.to_string()]);
+        assert_eq!(one(r"C:\a\photos.tar.gz"), "photos");
+        assert_eq!(one(r"C:\a\Movie.Part01.RAR"), "Movie");
+        assert_eq!(one(r"C:\a\v1.2.zip"), "v1.2");
+        assert_eq!(super::folder_name(&[r"C:\a.zip".into(), r"C:\b.zip".into()]), "*");
     }
 }

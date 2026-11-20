@@ -1,9 +1,10 @@
 //! ZIP: AES-256 for new encrypted archives; ZipCrypto and AES when reading.
 
 use std::fs::{self, File};
-use std::io::{BufReader, Seek, Write};
+use std::collections::HashMap;
+use std::io::{BufReader, Cursor, Seek, Write};
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Condvar, Mutex};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use zip::result::ZipError;
@@ -16,7 +17,8 @@ use super::{Entry, Error, ExtractOptions, Format, Listing, Progress, Result, Sou
 const FLAG_UTF8: u16 = 0x0800;
 
 fn open(path: &Path) -> Result<ZipArchive<BufReader<File>>> {
-    ZipArchive::new(BufReader::new(File::open(path)?)).map_err(map_error)
+    // 64 KB: the default 8 KB means a system call per 8 KB of packed data
+    ZipArchive::new(BufReader::with_capacity(64 << 10, File::open(path)?)).map_err(map_error)
 }
 
 fn map_error(e: ZipError) -> Error {
@@ -242,6 +244,53 @@ fn zip_time(source: &Source) -> DateTime {
     .unwrap_or_default()
 }
 
+/// Files up to this size are compressed in memory, several at a time; larger ones go straight into the archive
+const PARALLEL_FILE: u64 = 32 << 20;
+/// Source bytes being compressed or waiting for their turn to be written
+const PARALLEL_BUDGET: u64 = 192 << 20;
+
+fn file_options<'a>(base: SimpleFileOptions, source: &Source, password: Option<&'a str>) -> FileOptions<'a, 'a, ()> {
+    let options = base.last_modified_time(zip_time(source)).large_file(source.size >= u32::MAX as u64);
+    match password {
+        Some(p) if !source.is_dir => options.with_aes_encryption(AesMode::Aes256, p),
+        _ => options,
+    }
+}
+
+fn add_file<W: Write + Seek>(
+    zip: &mut ZipWriter<W>,
+    source: &Source,
+    base: SimpleFileOptions,
+    password: Option<&str>,
+    progress: &Progress,
+) -> Result<()> {
+    progress.check()?;
+    progress.set_current(&source.name);
+    zip.start_file(&source.name, file_options(base, source, password)).map_err(map_error)?;
+    let mut file = File::open(&source.path)?;
+    super::copy(&mut file, zip, progress)?;
+    Ok(())
+}
+
+/// One file as a complete little archive in memory: the entry is then copied into the real
+/// archive as it is, without compressing again.
+fn pack(source: &Source, base: SimpleFileOptions, password: Option<&str>, progress: &Progress) -> Result<Vec<u8>> {
+    let mut zip = ZipWriter::new(Cursor::new(Vec::with_capacity(source.size as usize / 2 + 512)));
+    add_file(&mut zip, source, base, password, progress)?;
+    Ok(zip.finish().map_err(map_error)?.into_inner())
+}
+
+#[derive(Default)]
+struct Packing {
+    /// The next source a thread takes
+    next: usize,
+    /// Sizes of the files taken and not yet written
+    reserved: u64,
+    ready: HashMap<usize, Vec<u8>>,
+    failed: Option<Error>,
+    stop: bool,
+}
+
 pub fn create<W: Write + Seek>(
     out: W,
     sources: &[Source],
@@ -257,22 +306,83 @@ pub fn create<W: Write + Seek>(
             .compression_method(CompressionMethod::Deflated)
             .compression_level(Some(level.min(9) as i64))
     };
-    for source in sources {
-        progress.check()?;
-        progress.set_current(&source.name);
-        let options = base.last_modified_time(zip_time(source)).large_file(source.size >= u32::MAX as u64);
-        if source.is_dir {
-            zip.add_directory(format!("{}/", source.name), options).map_err(map_error)?;
-            continue;
+    let small = |s: &Source| !s.is_dir && s.size <= PARALLEL_FILE;
+    // Deflate works on one core per file: the files are compressed by several threads and
+    // written in their order. Plain storing is as fast as the disk already.
+    let threads = (super::cpu_threads() as usize).min(8).min(sources.iter().filter(|s| small(s)).count());
+    let parallel = threads > 1 && (level > 0 || password.is_some());
+
+    let state = Mutex::new(Packing::default());
+    let changed = Condvar::new();
+    let result = std::thread::scope(|scope| {
+        if parallel {
+            for _ in 0..threads {
+                scope.spawn(|| {
+                    loop {
+                        let index = {
+                            let mut s = state.lock().unwrap();
+                            loop {
+                                if s.stop || s.failed.is_some() || s.next >= sources.len() {
+                                    return;
+                                }
+                                let source = &sources[s.next];
+                                // Folders and large files are the writer's
+                                if !small(source) {
+                                    s.next += 1;
+                                } else if s.reserved == 0 || s.reserved + source.size <= PARALLEL_BUDGET {
+                                    s.reserved += source.size;
+                                    s.next += 1;
+                                    break s.next - 1;
+                                } else {
+                                    s = changed.wait(s).unwrap();
+                                }
+                            }
+                        };
+                        let packed = pack(&sources[index], base, password, progress);
+                        let mut s = state.lock().unwrap();
+                        match packed {
+                            Ok(data) => drop(s.ready.insert(index, data)),
+                            Err(e) => drop(s.failed.get_or_insert(e)),
+                        }
+                        changed.notify_all();
+                    }
+                });
+            }
         }
-        let options: FileOptions<'_, '_, ()> = match password {
-            Some(p) => options.with_aes_encryption(AesMode::Aes256, p),
-            None => options,
-        };
-        zip.start_file(&source.name, options).map_err(map_error)?;
-        let mut file = File::open(&source.path)?;
-        super::copy(&mut file, &mut zip, progress)?;
-    }
+        let result = (|| {
+            for (index, source) in sources.iter().enumerate() {
+                if source.is_dir {
+                    progress.check()?;
+                    zip.add_directory(format!("{}/", source.name), file_options(base, source, password)).map_err(map_error)?;
+                } else if !parallel || !small(source) {
+                    add_file(&mut zip, source, base, password, progress)?;
+                } else {
+                    let data = {
+                        let mut s = state.lock().unwrap();
+                        loop {
+                            if let Some(e) = s.failed.take() {
+                                return Err(e);
+                            }
+                            if let Some(data) = s.ready.remove(&index) {
+                                break data;
+                            }
+                            s = changed.wait(s).unwrap();
+                        }
+                    };
+                    let mut packed = ZipArchive::new(Cursor::new(data)).map_err(map_error)?;
+                    zip.raw_copy_file(packed.by_index_raw(0).map_err(map_error)?).map_err(map_error)?;
+                    state.lock().unwrap().reserved -= source.size;
+                    changed.notify_all();
+                }
+            }
+            Ok(())
+        })();
+        // The threads still packing finish their file and leave
+        state.lock().unwrap().stop = true;
+        changed.notify_all();
+        result
+    });
+    result?;
     let mut out = zip.finish().map_err(map_error)?;
     out.flush()?;
     Ok(())

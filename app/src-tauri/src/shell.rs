@@ -42,8 +42,11 @@ mod windows {
 
     /// Command line flag and translation key of each submenu item.
     const PACK: [(&str, &str, &str); 2] = [("01add", "--add", "menu_add"), ("02password", "--add-password", "menu_add_password")];
-    const UNPACK: [(&str, &str, &str); 2] =
-        [("03extract", "--extract-here", "menu_extract_here"), ("04folder", "--extract-folder", "menu_extract_folder")];
+    const UNPACK: [(&str, &str, &str); 3] = [
+        ("03extract", "--extract-here", "menu_extract_here"),
+        ("04folder", "--extract-folder", "menu_extract_folder"),
+        ("05choose", "--extract-choose", "menu_extract_choose"),
+    ];
 
     /// A cascading "Arc" verb with the given items. Explorer starts one process per selected
     /// file; they are merged into one batch before Tauri starts (menubatch.rs).
@@ -57,7 +60,8 @@ mod windows {
         menu.set_value("MultiSelectModel", &"Player")?;
         for (name, flag, text) in items {
             let (item, _) = menu.create_subkey(format!(r"shell\{name}"))?;
-            item.set_value("MUIVerb", &strings.t(text))?;
+            // The classic menu has a fixed title: Extract to "*\" (the Windows 11 one names the folder)
+            item.set_value("MUIVerb", &strings.t(text).replace("{}", "*"))?;
             item.set_value("Icon", &format!("\"{exe}\",0"))?;
             item.create_subkey("command")?.0.set_value("", &format!("\"{exe}\" {flag} \"%1\""))?;
         }
@@ -83,7 +87,13 @@ mod windows {
         // The menu handler (app/shellext) reads its texts here
         menu.set_value("Exe", &exe)?;
         menu.set_value("Extensions", &ARCHIVE_EXTENSIONS.join(";"))?;
-        for (name, key) in [("Add", "menu_add"), ("AddPassword", "menu_add_password"), ("ExtractHere", "menu_extract_here"), ("ExtractFolder", "menu_extract_folder")] {
+        for (name, key) in [
+            ("Add", "menu_add"),
+            ("AddPassword", "menu_add_password"),
+            ("ExtractHere", "menu_extract_here"),
+            ("ExtractFolder", "menu_extract_folder"),
+            ("ExtractChoose", "menu_extract_choose"),
+        ] {
             menu.set_value(name, &strings.t(key))?;
         }
         menu.set_value("Enabled", &1u32)?;

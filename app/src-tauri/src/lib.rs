@@ -35,7 +35,7 @@ pub fn log(message: &str) {
 /// What Arc was asked to do from the command line (Explorer menu, "Open with", a second launch).
 #[derive(Serialize, Clone, Debug)]
 struct OpenRequest {
-    /// open | add | add_password | extract_here | extract_folder
+    /// open | add | add_password | extract_here | extract_folder | extract_choose
     action: String,
     paths: Vec<String>,
 }
@@ -50,6 +50,7 @@ fn parse_args(args: &[String], cwd: &Path) -> Option<OpenRequest> {
             "--add-password" => action = "add_password",
             "--extract-here" => action = "extract_here",
             "--extract-folder" => action = "extract_folder",
+            "--extract-choose" => action = "extract_choose",
             // The Windows 11 menu (app/shellext): every selected path in a temporary file, one per line
             "--list" => {
                 if let Some(list) = args.next() {
@@ -85,7 +86,7 @@ struct Batch {
 /// Work for a small progress window: a request from the Explorer menu, or jobs prepared by the main window.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 struct Task {
-    /// add | add_password | extract_here | extract_folder | jobs
+    /// add | add_password | extract_here | extract_folder | extract_choose | jobs
     action: String,
     #[serde(default)]
     paths: Vec<String>,

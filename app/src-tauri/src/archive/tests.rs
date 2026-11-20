@@ -334,3 +334,66 @@ fn zip_many_files_parallel() {
     let (done, total) = progress.snapshot();
     assert_eq!(done, total);
 }
+/// Files are compressed by several threads, and still land in the archive in their order,
+/// with their times, next to folders and to files too large for the threads' memory.
+#[test]
+fn zip_parallel_keeps_order_and_times() {
+    let tmp = TempDir::new("zip-order");
+    let src = tmp.0.join("data");
+    fs::create_dir_all(src.join("sub")).unwrap();
+    for i in 0..60 {
+        let dir = if i % 3 == 0 { src.join("sub") } else { src.clone() };
+        fs::write(dir.join(format!("f{i:02}.txt")), format!("file {i} ").repeat(i * 300 + 1)).unwrap();
+    }
+    let sources = collect(std::slice::from_ref(&src), &[]).unwrap();
+    for password in [None, Some("пароль")] {
+        let archive = tmp.0.join(format!("out-{}.zip", password.is_some()));
+        let opts = CreateOptions { format: Format::Zip, level: 5, password: password.map(String::from), encrypt_names: false };
+        create(std::slice::from_ref(&src), &archive, &opts, &Progress::default()).unwrap();
+        let listing = list(&archive, password, &Progress::default()).unwrap();
+        let names: Vec<_> = listing.entries.iter().map(|e| e.path.as_str()).collect();
+        assert_eq!(names, sources.iter().map(|s| s.name.as_str()).collect::<Vec<_>>());
+        for (entry, source) in listing.entries.iter().zip(&sources) {
+            assert_eq!(entry.size, source.size, "{}", entry.path);
+            assert_eq!(entry.encrypted, password.is_some() && !source.is_dir, "{}", entry.path);
+            // DOS time: 2 seconds
+            assert!((entry.modified.unwrap() - source.unix_time()).abs() <= 2, "{}", entry.path);
+        }
+        let out = tmp.0.join(format!("x-{}", password.is_some()));
+        extract(&archive, &options(&out, password), &Progress::default()).unwrap();
+        assert_same(&src, &out);
+    }
+}
+
+/// What happens to a file that is already there, and to a file named like an existing folder.
+#[test]
+fn conflicts() {
+    let tmp = TempDir::new("conflicts");
+    let src = sample(&tmp.0);
+    let archive = tmp.0.join("out.zip");
+    let opts = CreateOptions { format: Format::Zip, level: 1, password: None, encrypt_names: false };
+    create(std::slice::from_ref(&src), &archive, &opts, &Progress::default()).unwrap();
+    let out = tmp.0.join("out");
+    extract(&archive, &options(&out, None), &Progress::default()).unwrap();
+    let readme = out.join("docs/readme.txt");
+
+    fs::write(&readme, "mine").unwrap();
+    let mut skip = options(&out, None);
+    skip.conflict = Conflict::Skip;
+    extract(&archive, &skip, &Progress::default()).unwrap();
+    assert_eq!(fs::read_to_string(&readme).unwrap(), "mine");
+    assert!(!out.join("docs/readme (1).txt").exists());
+
+    let mut overwrite = options(&out, None);
+    overwrite.conflict = Conflict::Overwrite;
+    extract(&archive, &overwrite, &Progress::default()).unwrap();
+    assert_eq!(fs::read_to_string(&readme).unwrap(), "hello archive");
+    assert!(!out.join("docs/readme (1).txt").exists());
+
+    // A folder has the file's name: the file goes next to it
+    fs::remove_file(&readme).unwrap();
+    fs::create_dir(&readme).unwrap();
+    extract(&archive, &options(&out, None), &Progress::default()).unwrap();
+    assert!(readme.is_dir());
+    assert_eq!(fs::read_to_string(out.join("docs/readme.txt (1)")).unwrap(), "hello archive");
+}

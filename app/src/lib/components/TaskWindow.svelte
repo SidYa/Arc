@@ -3,10 +3,11 @@
 <script lang="ts">
   import { getCurrentWindow, LogicalSize } from "@tauri-apps/api/window";
   import { listen } from "@tauri-apps/api/event";
+  import { open } from "@tauri-apps/plugin-dialog";
   import { CircleAlert, Eye, EyeOff, KeyRound, Minus, PackageOpen, PackagePlus, Pause, Play, X } from "@lucide/svelte";
   import { onMount, tick } from "svelte";
   import { api, type CreateOptions, type JobFinished, type JobProgress, type JobSpec, type Task } from "../api";
-  import { baseName, formatEta, formatSize, formatSpeed } from "../format";
+  import { baseName, dirName, formatEta, formatSize, formatSpeed } from "../format";
   import { t } from "../i18n.svelte";
   import { errorText, isPasswordError, onJobFinished, onJobProgress, startJob, type Job } from "../jobs";
   import { app } from "../store.svelte";
@@ -81,7 +82,12 @@
       return;
     }
     if (task.action === "jobs") queue = task.specs ?? [];
-    else {
+    else if (task.action === "extract_choose") {
+      // Explorer menu "Extract to…": one folder for all the selected archives
+      const dest = await open({ directory: true, defaultPath: paths[0] ? dirName(paths[0]) : undefined });
+      if (typeof dest !== "string") return close();
+      queue = paths.map((archive) => ({ kind: "extract", archive, mode: "to", dest, password: null }));
+    } else {
       const mode = task.action === "extract_here" ? "here" : "folder";
       queue = paths.map((archive) => ({ kind: "extract", archive, mode, password: null }));
     }

@@ -154,6 +154,9 @@ pub fn extract(path: &Path, opts: &ExtractOptions, progress: &Progress) -> Resul
     Ok(())
 }
 
+/// Dictionary of each LZMA2 level (the presets of xz)
+const LZMA2_DICT: [u64; 10] = [1 << 18, 1 << 20, 1 << 21, 1 << 22, 1 << 22, 1 << 23, 1 << 23, 1 << 24, 1 << 25, 1 << 26];
+
 fn reader_source(path: &Path) -> Result<BufReader<File>> {
     Ok(BufReader::with_capacity(1 << 20, File::open(path)?))
 }
@@ -177,7 +180,9 @@ pub fn create<W: Write + Seek>(
     let compression = if level == 0 {
         EncoderMethod::COPY.into()
     } else {
-        Lzma2Options::from_level_mt(level, threads, 64 << 20).into()
+        // Threads compress separate chunks. Two dictionaries per chunk (xz uses three): with
+        // larger ones only archives of gigabytes get all the cores, for about the same size
+        Lzma2Options::from_level_mt(level, threads, (2 * LZMA2_DICT[level as usize]).max(4 << 20)).into()
     };
     let mut methods = Vec::new();
     if let Some(p) = pw {

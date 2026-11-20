@@ -140,7 +140,7 @@ pub fn extract(path: &Path, format: Format, opts: &ExtractOptions, progress: &Pr
             t.duration_since(std::time::UNIX_EPOCH).ok().map(|d| d.as_secs() as i64)
         });
         // Progress counts the compressed input here
-        super::write_file(opts, &relative, modified, |out| copy_uncounted(&mut stream, out, progress).map(drop))
+        super::write_file(opts, &relative, modified, |out| super::copy_uncounted(&mut stream, out, progress).map(drop))
             .map_err(|e| map_io(e, progress))?;
         return Ok(());
     }
@@ -161,7 +161,7 @@ pub fn extract(path: &Path, format: Format, opts: &ExtractOptions, progress: &Pr
                 dir_times.push((dir, modified));
             }
         } else if kind.is_file() || kind == EntryType::Continuous {
-            super::write_file(opts, &relative, modified, |out| copy_uncounted(&mut entry, out, progress).map(drop))
+            super::write_file(opts, &relative, modified, |out| super::copy_uncounted(&mut entry, out, progress).map(drop))
                 .map_err(|e| map_io(e, progress))?;
             files += 1;
             // Everything wanted is out: the rest of the stream isn't decompressed
@@ -175,21 +175,6 @@ pub fn extract(path: &Path, format: Format, opts: &ExtractOptions, progress: &Pr
         super::set_modified(&dir, modified);
     }
     Ok(())
-}
-
-/// Copy whose progress is counted on the compressed side (by `open`).
-fn copy_uncounted(reader: &mut dyn Read, writer: &mut dyn Write, progress: &Progress) -> io::Result<u64> {
-    let mut buf = vec![0u8; 256 * 1024];
-    let mut total = 0;
-    loop {
-        progress.check()?;
-        let n = reader.read(&mut buf)?;
-        if n == 0 {
-            return Ok(total);
-        }
-        writer.write_all(&buf[..n])?;
-        total += n as u64;
-    }
 }
 
 pub fn create<W: Write>(out: W, format: Format, sources: &[Source], level: u32, progress: &Progress) -> Result<()> {

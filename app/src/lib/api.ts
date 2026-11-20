@@ -45,7 +45,7 @@ export interface InitialState {
   system_accent: string | null;
 }
 
-export type Action = "open" | "add" | "add_password" | "extract_here" | "extract_folder";
+export type Action = "open" | "add" | "add_password" | "extract_here" | "extract_folder" | "extract_choose";
 
 /** Work for a small progress window */
 export interface Task {

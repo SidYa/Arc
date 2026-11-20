@@ -30,13 +30,17 @@ export interface OpenArchive {
   tree: Tree;
 }
 
-export const view = $state({
-  archive: null as OpenArchive | null,
+class View {
+  /** Raw: a listing has up to hundreds of thousands of entries, and nothing in it changes.
+   *  A deep proxy would wrap every entry the first time the list is walked. */
+  archive = $state.raw<OpenArchive | null>(null);
   /** Folder inside the archive, "" is the root */
-  cwd: "",
-  sort: "name" as SortKey,
-  desc: false,
-});
+  cwd = $state("");
+  sort = $state<SortKey>("name");
+  desc = $state(false);
+}
+
+export const view = new View();
 
 /** Paths of the selected entries in the current folder */
 export const selection = new SvelteSet<string>();

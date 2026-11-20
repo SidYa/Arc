@@ -302,29 +302,54 @@ impl<T: Write> Write for Counted<'_, T> {
 
 /// Larger chunks than io::copy: fewer progress updates and syscalls.
 pub fn copy(reader: &mut dyn Read, writer: &mut dyn Write, progress: &Progress) -> io::Result<u64> {
+    copy_buffered(reader, writer, progress, true)
+}
+
+/// The same copy for streams whose progress is counted elsewhere (tar: on the compressed side).
+pub fn copy_uncounted(reader: &mut dyn Read, writer: &mut dyn Write, progress: &Progress) -> io::Result<u64> {
+    copy_buffered(reader, writer, progress, false)
+}
+
+fn copy_buffered(reader: &mut dyn Read, writer: &mut dyn Write, progress: &Progress, count: bool) -> io::Result<u64> {
     // One buffer per thread: archives of thousands of small files would allocate it for each
     thread_local! {
         static BUF: std::cell::RefCell<Vec<u8>> = std::cell::RefCell::new(vec![0u8; 256 * 1024]);
     }
     BUF.with(|buf| match buf.try_borrow_mut() {
-        Ok(mut buf) => copy_with(reader, writer, progress, &mut buf),
-        Err(_) => copy_with(reader, writer, progress, &mut vec![0u8; 256 * 1024]),
+        Ok(mut buf) => copy_with(reader, writer, progress, count, &mut buf),
+        Err(_) => copy_with(reader, writer, progress, count, &mut vec![0u8; 256 * 1024]),
     })
 }
 
-fn copy_with(reader: &mut dyn Read, writer: &mut dyn Write, progress: &Progress, buf: &mut [u8]) -> io::Result<u64> {
+fn copy_with(reader: &mut dyn Read, writer: &mut dyn Write, progress: &Progress, count: bool, buf: &mut [u8]) -> io::Result<u64> {
     let mut total = 0;
     loop {
-        progress.check()?;
-        let n = match reader.read(buf) {
-            Ok(0) => return Ok(total),
-            Ok(n) => n,
-            Err(e) if e.kind() == io::ErrorKind::Interrupted && e.to_string() != "cancelled" => continue,
-            Err(e) => return Err(e),
-        };
-        writer.write_all(&buf[..n])?;
-        progress.add(n as u64);
-        total += n as u64;
+        // The buffer is filled before it is written: decoders hand out small pieces, and the
+        // writer is an unbuffered file, so every write is a system call
+        let mut filled = 0;
+        let mut end = false;
+        while filled < buf.len() {
+            progress.check()?;
+            match reader.read(&mut buf[filled..]) {
+                Ok(0) => {
+                    end = true;
+                    break;
+                }
+                Ok(n) => {
+                    filled += n;
+                    if count {
+                        progress.add(n as u64);
+                    }
+                }
+                Err(e) if e.kind() == io::ErrorKind::Interrupted && e.to_string() != "cancelled" => continue,
+                Err(e) => return Err(e),
+            }
+        }
+        writer.write_all(&buf[..filled])?;
+        total += filled as u64;
+        if end {
+            return Ok(total);
+        }
     }
 }
 
@@ -449,13 +474,39 @@ pub fn unique_path(path: &Path) -> PathBuf {
 }
 
 /// Creates the file (and its folder), returning None when the name is unsafe or skipped.
+/// The file is opened straight away, without asking first whether it or its folder exists
+/// (system calls that add up over thousands of files); only a failure looks for the reason.
+/// "Create new" also keeps threads extracting at once from taking the same name.
 pub fn create_file(opts: &ExtractOptions, relative: &str) -> io::Result<Option<(PathBuf, File)>> {
-    let Some(path) = opts.file_path(relative) else { return Ok(None) };
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)?;
+    let Some(wanted) = safe_join(opts.dest, relative) else { return Ok(None) };
+    let mut path = wanted.clone();
+    let mut made_parent = false;
+    loop {
+        let mut open = fs::OpenOptions::new();
+        if opts.conflict == Conflict::Overwrite {
+            open.write(true).create(true).truncate(true);
+        } else {
+            open.write(true).create_new(true);
+        }
+        let error = match open.open(&path) {
+            Ok(file) => return Ok(Some((path, file))),
+            Err(e) => e,
+        };
+        if error.kind() == io::ErrorKind::NotFound && !made_parent {
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            made_parent = true;
+        } else if opts.conflict != Conflict::Overwrite && path.exists() {
+            match opts.conflict {
+                Conflict::Skip => return Ok(None),
+                // Taken (a folder counts too): the next free "name (1)"
+                _ => path = unique_path(&wanted),
+            }
+        } else {
+            return Err(error);
+        }
     }
-    let file = File::create(&path)?;
-    Ok(Some((path, file)))
 }
 
 /// Writes one extracted file: `fill` copies the data in. The time is set on the open handle
@@ -466,17 +517,17 @@ pub fn write_file(
     modified: Option<i64>,
     fill: impl FnOnce(&mut dyn Write) -> io::Result<()>,
 ) -> io::Result<Option<PathBuf>> {
-    let Some((target, file)) = create_file(opts, relative)? else { return Ok(None) };
-    let mut out = io::BufWriter::with_capacity(1 << 20, file);
-    let result = fill(&mut out).and_then(|_| out.flush());
-    match result.and_then(|_| out.into_inner().map_err(|e| e.into_error())) {
-        Ok(file) => {
+    let Some((target, mut file)) = create_file(opts, relative)? else { return Ok(None) };
+    // No buffer in between: `copy` already writes in large pieces
+    match fill(&mut file) {
+        Ok(()) => {
             if let Some(secs) = modified {
                 let _ = filetime::set_file_handle_times(&file, None, Some(filetime::FileTime::from_unix_time(secs, 0)));
             }
             Ok(Some(target))
         }
         Err(e) => {
+            drop(file);
             let _ = fs::remove_file(&target);
             Err(e)
         }

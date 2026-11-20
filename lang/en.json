@@ -1,8 +1,9 @@
 {
   "menu_add": "Add to archive",
   "menu_add_password": "Add to archive with password",
-  "menu_extract_here": "Extract here",
-  "menu_extract_folder": "Extract to folder",
+  "menu_extract_here": "Extract",
+  "menu_extract_folder": "Extract to \"{}\\\"",
+  "menu_extract_choose": "Extract to…",
   "archive_type": "Archive",
 
   "open": "Open",
@@ -161,5 +162,5 @@
   "assoc_done": "Arc now opens all archive types",
   "assoc_settings": "Windows lets only you choose the default: on Arc’s page in Settings click “Choose a default” next to each type and pick Arc",
   "context_menu": "Explorer context menu",
-  "context_menu_desc": "Arc submenu: add to archive, with password, extract here, extract to folder."
+  "context_menu_desc": "Arc submenu: add to archive, with password, extract, extract to a folder named after the archive, extract to…"
 }
