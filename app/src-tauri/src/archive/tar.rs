@@ -5,9 +5,7 @@ use std::fs::{self, File};
 use std::io::{self, BufReader, Read, Write};
 use std::path::Path;
 
-use flate2::Compression;
 use flate2::read::MultiGzDecoder;
-use flate2::write::GzEncoder;
 use tar::{Archive, Builder, EntryType, Header};
 
 use super::{Counted, Entry, Error, ExtractOptions, Format, Listing, Progress, Result, Source};
@@ -181,14 +179,18 @@ pub fn create<W: Write>(out: W, format: Format, sources: &[Source], level: u32, 
     let level = level.min(9);
     match format {
         Format::TarGz => {
-            let encoder = GzEncoder::new(out, Compression::new(level));
+            // Every core compresses its part of the stream (deflate.rs): still one ordinary gzip file
+            let encoder = super::deflate::GzWriter::new(out, level, super::cpu_threads() as usize)?;
             let encoder = write_tar(encoder, sources, progress)?;
             encoder.finish()?.flush()?;
         }
         Format::TarXz => {
             // Parallel xz splits the stream into blocks: all cores, still readable by every xz tool
             let mut stream = liblzma::stream::MtStreamBuilder::new();
-            stream.threads(super::cpu_threads().min(16)).preset(level).check(liblzma::stream::Check::Crc64);
+            // Blocks of two dictionaries (the default is three): more of them, so more cores on archives
+            // of tens of megabytes, for about the same size
+            let block = (2 * super::sevenz::LZMA2_DICT[level as usize]).max(4 << 20);
+            stream.threads(super::cpu_threads().min(16)).preset(level).block_size(block).check(liblzma::stream::Check::Crc64);
             let stream = stream.encoder().map_err(|e| Error::Other(e.to_string()))?;
             let encoder = liblzma::write::XzEncoder::new_stream(out, stream);
             let encoder = write_tar(encoder, sources, progress)?;

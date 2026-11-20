@@ -155,7 +155,7 @@ pub fn extract(path: &Path, opts: &ExtractOptions, progress: &Progress) -> Resul
 }
 
 /// Dictionary of each LZMA2 level (the presets of xz)
-const LZMA2_DICT: [u64; 10] = [1 << 18, 1 << 20, 1 << 21, 1 << 22, 1 << 22, 1 << 23, 1 << 23, 1 << 24, 1 << 25, 1 << 26];
+pub(super) const LZMA2_DICT: [u64; 10] = [1 << 18, 1 << 20, 1 << 21, 1 << 22, 1 << 22, 1 << 23, 1 << 23, 1 << 24, 1 << 25, 1 << 26];
 
 fn reader_source(path: &Path) -> Result<BufReader<File>> {
     Ok(BufReader::with_capacity(1 << 20, File::open(path)?))

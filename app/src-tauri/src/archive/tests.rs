@@ -397,3 +397,97 @@ fn conflicts() {
     assert!(readme.is_dir());
     assert_eq!(fs::read_to_string(out.join("docs/readme.txt (1)")).unwrap(), "hello archive");
 }
+
+/// Files of several chunks (compressed by several threads at once), one that cannot be compressed,
+/// one that is exactly a chunk long, an empty one.
+fn big_sample(root: &Path) -> PathBuf {
+    let src = root.join("big");
+    fs::create_dir_all(src.join("empty-dir")).unwrap();
+    let mut seed = 7u32;
+    let mut noise = |len: usize, letters: bool| -> Vec<u8> {
+        (0..len)
+            .map(|_| {
+                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                if letters { b"the quick brown fox \n"[(seed >> 24) as usize % 21] } else { (seed >> 24) as u8 }
+            })
+            .collect()
+    };
+    fs::write(src.join("text.txt"), noise(5_300_000, true)).unwrap();
+    fs::write(src.join("random.bin"), noise(2_500_000, false)).unwrap();
+    fs::write(src.join("chunk.txt"), noise(1 << 20, true)).unwrap();
+    fs::write(src.join("small-random.bin"), noise(3000, false)).unwrap();
+    fs::write(src.join("zero"), "").unwrap();
+    src
+}
+
+#[test]
+fn zip_big_files() {
+    let tmp = TempDir::new("zip-big");
+    let src = big_sample(&tmp.0);
+    for (level, password) in [(5, None), (5, Some("secret-123")), (0, None), (0, Some("secret-123")), (9, None)] {
+        let archive = tmp.0.join(format!("big-{level}-{}.zip", password.is_some()));
+        let opts = CreateOptions { format: Format::Zip, level, password: password.map(String::from), encrypt_names: false };
+        let progress = Progress::default();
+        create(std::slice::from_ref(&src), &archive, &opts, &progress).unwrap();
+        let (done, total) = progress.snapshot();
+        assert_eq!(done, total);
+        let size = fs::metadata(&archive).unwrap().len();
+        if level > 0 {
+            // The text packs well; what doesn't pack is not made larger
+            assert!(size < 6_200_000, "{size}");
+        }
+        if password.is_some() {
+            let out = tmp.0.join("wrong");
+            let err = extract(&archive, &options(&out, Some("wrong")), &Progress::default()).unwrap_err();
+            assert!(matches!(err, Error::WrongPassword), "{err}");
+        }
+        let out = tmp.0.join(format!("out-{level}-{}", password.is_some()));
+        extract(&archive, &options(&out, password), &Progress::default()).unwrap();
+        assert_same(&src, &out);
+        if let Ok(keep) = std::env::var("ARC_KEEP") {
+            fs::copy(&archive, Path::new(&keep).join(archive.file_name().unwrap())).unwrap();
+        }
+    }
+}
+
+/// The 64-bit fields, reached without 4 GB of data by lowering their limit.
+#[test]
+fn zip64_fields() {
+    let tmp = TempDir::new("zip64");
+    let src = big_sample(&tmp.0);
+    let sources = collect(std::slice::from_ref(&src), &[]).unwrap();
+    for password in [None, Some("секрет")] {
+        let archive = tmp.0.join(format!("zip64-{}.zip", password.is_some()));
+        let file = fs::File::create(&archive).unwrap();
+        zipwrite::create_with(file, &sources, 5, password, &Progress::default(), 1000).unwrap();
+        let listing = list(&archive, password, &Progress::default()).unwrap();
+        assert_eq!(listing.entries.len(), sources.len());
+        for (entry, source) in listing.entries.iter().zip(&sources) {
+            assert_eq!((entry.path.as_str(), entry.size), (source.name.as_str(), source.size));
+        }
+        let out = tmp.0.join(format!("out-{}", password.is_some()));
+        extract(&archive, &options(&out, password), &Progress::default()).unwrap();
+        assert_same(&src, &out);
+        if let Ok(keep) = std::env::var("ARC_KEEP") {
+            fs::copy(&archive, Path::new(&keep).join(archive.file_name().unwrap())).unwrap();
+        }
+    }
+}
+
+/// gzip written by several threads is one ordinary stream.
+#[test]
+fn tar_gz_big_files() {
+    let tmp = TempDir::new("tgz-big");
+    let src = big_sample(&tmp.0);
+    for level in [0, 1, 5, 9] {
+        let archive = tmp.0.join(format!("big-{level}.tar.gz"));
+        let opts = CreateOptions { format: Format::TarGz, level, password: None, encrypt_names: false };
+        create(std::slice::from_ref(&src), &archive, &opts, &Progress::default()).unwrap();
+        let out = tmp.0.join(format!("out-{level}"));
+        extract(&archive, &options(&out, None), &Progress::default()).unwrap();
+        assert_same(&src, &out);
+        if let Ok(keep) = std::env::var("ARC_KEEP") {
+            fs::copy(&archive, Path::new(&keep).join(archive.file_name().unwrap())).unwrap();
+        }
+    }
+}

@@ -1,9 +1,11 @@
 //! Archive formats behind one interface: list, extract (all or some entries) and create.
 
+mod deflate;
 pub mod rar;
 pub mod sevenz;
 pub mod tar;
 pub mod zip;
+mod zipwrite;
 
 use std::collections::HashSet;
 use std::fmt;
@@ -622,7 +624,7 @@ pub fn create(paths: &[PathBuf], dest: &Path, opts: &CreateOptions, progress: &P
     let result = (|| {
         let file = io::BufWriter::with_capacity(1 << 20, File::create(&temp)?);
         match opts.format {
-            Format::Zip => zip::create(file, &sources, opts.level, password, progress),
+            Format::Zip => zipwrite::create(file, &sources, opts.level, password, progress),
             Format::SevenZ => sevenz::create(file, &sources, opts.level, password, opts.encrypt_names, progress),
             Format::TarGz | Format::TarXz | Format::Tar => tar::create(file, opts.format, &sources, opts.level, progress),
             _ => Err(Error::Other("unsupported_format".into())),
@@ -658,7 +660,7 @@ pub fn dos_to_unix(date: u16, time: u16) -> Option<i64> {
 pub struct LazyFile<'a> {
     path: PathBuf,
     name: String,
-    file: Option<File>,
+    file: Option<io::BufReader<File>>,
     finished: bool,
     progress: &'a Progress,
 }
@@ -677,7 +679,8 @@ impl Read for LazyFile<'_> {
         }
         if self.file.is_none() {
             self.progress.set_current(&self.name);
-            self.file = Some(File::open(&self.path)?);
+            // The 7z writer asks for 4 KB at a time
+            self.file = Some(io::BufReader::with_capacity(256 << 10, File::open(&self.path)?));
         }
         let n = self.file.as_mut().unwrap().read(buf)?;
         if n == 0 {

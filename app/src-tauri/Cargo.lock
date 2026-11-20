@@ -62,16 +62,22 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 name = "arc"
 version = "1.0.0"
 dependencies = [
+ "aes",
  "chrono",
+ "crc32fast",
  "dirs 6.0.0",
  "drag",
  "encoding_rs",
  "filetime",
  "flate2",
+ "getrandom 0.3.4",
+ "hmac",
  "liblzma",
+ "pbkdf2",
  "serde",
  "serde_json",
  "sevenz-rust2",
+ "sha1",
  "sys-locale",
  "tar",
  "tauri",
